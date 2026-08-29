@@ -60,11 +60,18 @@ import { handleTradingRest } from "./trading-rest.js";
 import { handleAutonomyRest } from "./autonomy-rest.js";
 
 assertProductionConfiguration(process.env);
+const production = process.env.NODE_ENV === "production";
+const serverless = process.env.VERCEL === "1";
 const host = process.env.MCP_HOST ?? "127.0.0.1";
 const port = Number(process.env.MCP_PORT ?? 3100);
 const allowedHosts = commaSeparated(process.env.MCP_ALLOWED_HOSTS);
 const allowedOriginHosts = commaSeparated(process.env.MCP_ALLOWED_ORIGIN_HOSTS);
-if (host !== "127.0.0.1" && host !== "localhost" && allowedHosts.length === 0) {
+if (
+  !serverless &&
+  host !== "127.0.0.1" &&
+  host !== "localhost" &&
+  allowedHosts.length === 0
+) {
   throw new Error(
     "MCP_ALLOWED_HOSTS must contain an explicit hostname allow-list for a remote bind.",
   );
@@ -74,6 +81,19 @@ const publicOrigin =
   process.env.NORMIC_PUBLIC_ORIGIN ?? `http://127.0.0.1:${port}`;
 const audience = process.env.NORMIC_AUTH_AUDIENCE ?? `${publicOrigin}/mcp`;
 const issuer = process.env.NORMIC_AUTH_ISSUER ?? `${publicOrigin}/dev-auth`;
+if (production) {
+  if (publicOrigin !== "https://normic.tech")
+    throw new Error(
+      "NORMIC_PUBLIC_ORIGIN must be https://normic.tech in production.",
+    );
+  if (
+    process.env.NORMIC_REMOTE_MCP_URL !== "https://normic.tech/mcp" ||
+    audience !== "https://normic.tech/mcp"
+  )
+    throw new Error(
+      "NORMIC_REMOTE_MCP_URL and NORMIC_AUTH_AUDIENCE must be https://normic.tech/mcp in production.",
+    );
+}
 const developmentAuthEnabled =
   process.env.NORMIC_DEV_AUTH_ENABLED === "true" ||
   process.env.NODE_ENV !== "production";
@@ -156,6 +176,13 @@ function configuredVerifier(prefix: "NORMIC_AUTH" | "NORMIC_OWNER_AUTH") {
 }
 const accessVerifier = configuredVerifier("NORMIC_AUTH");
 const ownerVerifier = configuredVerifier("NORMIC_OWNER_AUTH");
+if (process.env.NODE_ENV === "production") {
+  await accessVerifier!.validateJwks();
+  if (
+    process.env.NORMIC_OWNER_AUTH_JWKS_URL !== process.env.NORMIC_AUTH_JWKS_URL
+  )
+    await ownerVerifier!.validateJwks();
+}
 const readiness = (): ProductionReadiness =>
   buildProductionReadiness(process.env, {
     database: { kind: database.kind, connected: true },
@@ -173,6 +200,9 @@ const oauthAuthenticator = accessVerifier
 const resourceMetadataUrl = getOAuthProtectedResourceMetadataUrl(
   new URL(audience),
 );
+const oauthRequestScopes = developmentAuthEnabled
+  ? API_SCOPES
+  : (["openid", "profile", "email"] as const);
 const makeAuthGate = (allowApiCredential: boolean) =>
   requireBearerAuth({
     resourceMetadataUrl,
@@ -445,9 +475,215 @@ async function handleRequest(
   });
 }
 
-server.listen(port, host, () => {
-  console.log(`Normic authenticated MCP server listening at ${audience}`);
-});
+export async function handleVercelRequest(request: Request): Promise<Response> {
+  const url = new URL(request.url);
+  const requestId = randomUUID();
+  try {
+    if (
+      process.env.VERCEL_ENV === "production" &&
+      url.hostname !== "normic.tech"
+    )
+      return webJson(403, {
+        error: { code: "HOST_NOT_ALLOWED", message: "Host is not allowed." },
+      });
+    const origin = request.headers.get("origin");
+    if (origin && origin !== "https://normic.tech")
+      return webJson(403, {
+        error: {
+          code: "ORIGIN_NOT_ALLOWED",
+          message: "Origin is not allowed.",
+        },
+      });
+    if (request.method === "OPTIONS")
+      return withWebHeaders(
+        new Response(null, { status: 204 }),
+        requestId,
+        origin,
+      );
+
+    const forwardedFor = request.headers.get("x-forwarded-for") ?? "unknown";
+    const rate = await repository.consumeRateLimit({
+      bucket: createHash("sha256")
+        .update(
+          `${forwardedFor.split(",")[0]?.trim()}:${routeLabel(url.pathname)}`,
+        )
+        .digest("hex"),
+      limit: Number(process.env.NORMIC_RATE_LIMIT_PER_MINUTE ?? 120),
+      windowSeconds: 60,
+      now: new Date(),
+    });
+    if (!rate.allowed) {
+      const response = webJson(429, {
+        error: {
+          code: "RATE_LIMITED",
+          message: "Too many requests. Retry later.",
+        },
+      });
+      response.headers.set("retry-after", String(rate.retryAfterSeconds));
+      return withWebHeaders(response, requestId, origin, rate.remaining);
+    }
+
+    if (url.pathname === "/health")
+      return withWebHeaders(
+        webJson(200, { status: "ok", service: "normic-vercel" }),
+        requestId,
+        origin,
+        rate.remaining,
+      );
+    if (url.pathname === "/status" || url.pathname === "/api/status")
+      return withWebHeaders(
+        webJson(200, readiness()),
+        requestId,
+        origin,
+        rate.remaining,
+      );
+    if (
+      url.pathname === new URL(resourceMetadataUrl).pathname ||
+      url.pathname === "/.well-known/oauth-protected-resource"
+    )
+      return withWebHeaders(
+        webJson(200, {
+          resource: audience,
+          authorization_servers: [issuer],
+          bearer_methods_supported: ["header"],
+          scopes_supported: oauthRequestScopes,
+        }),
+        requestId,
+        origin,
+        rate.remaining,
+      );
+
+    if (url.pathname === "/mcp") {
+      const auth = await authenticateWebRequest(request, mcpAuthGate);
+      if (auth instanceof Response)
+        return withWebHeaders(auth, requestId, origin, rate.remaining);
+      const ownerHeader = request.headers.get("x-normic-owner-authorization");
+      if (ownerHeader) {
+        if (!ownerVerifier)
+          throw new AuthenticationError("Owner verification is unavailable.");
+        const token = ownerHeader.match(/^Bearer (\S+)$/i)?.[1];
+        if (!token) throw new AuthenticationError();
+        auth.extra = {
+          ...auth.extra,
+          verifiedOwner: await ownerVerifier.verifyOwner(token),
+        };
+      }
+      return withWebHeaders(
+        await mcpHandler.fetch(request, { authInfo: auth }),
+        requestId,
+        origin,
+        rate.remaining,
+      );
+    }
+
+    if (url.pathname === "/api/v1" || url.pathname.startsWith("/api/v1/")) {
+      const nodeRequest = await webToNodeRequest(
+        request,
+        `${url.pathname.slice("/api".length)}${url.search}`,
+      );
+      const nodeResponse = new CapturedServerResponse();
+      const ownerCheck = ownerVerifier
+        ? async (token: string) => ownerVerifier.verifyOwner(token)
+        : undefined;
+      let handled =
+        (await handleAutonomyRest(
+          nodeRequest,
+          nodeResponse.response,
+          autonomy,
+          async () => webAgentActor(request),
+          ownerCheck,
+        )) ||
+        (await handleTradingRest(
+          nodeRequest,
+          nodeResponse.response,
+          trading,
+          async () => webAgentActor(request),
+          ownerCheck,
+        )) ||
+        (await handleFinancialRest(
+          nodeRequest,
+          nodeResponse.response,
+          finance,
+          async () => webAgentActor(request),
+          ownerCheck,
+        ));
+      if (!handled)
+        handled = await handlePublicRestRequest(
+          nodeRequest,
+          nodeResponse.response,
+          economy,
+          ownerCheck,
+        );
+      if (!handled) {
+        const auth = await authenticateWebRequest(request, restAuthGate);
+        if (auth instanceof Response)
+          return withWebHeaders(auth, requestId, origin, rate.remaining);
+        handled = await handleRestRequest(
+          nodeRequest,
+          nodeResponse.response,
+          economy,
+          markets,
+          requestContext(auth),
+          finance,
+          trading,
+        );
+      }
+      return withWebHeaders(
+        handled
+          ? nodeResponse.toResponse()
+          : webJson(404, {
+              error: { code: "NOT_FOUND", message: "Route not found." },
+            }),
+        requestId,
+        origin,
+        rate.remaining,
+      );
+    }
+
+    return withWebHeaders(
+      webJson(404, {
+        error: { code: "NOT_FOUND", message: "Route not found." },
+      }),
+      requestId,
+      origin,
+      rate.remaining,
+    );
+  } catch (error) {
+    const { status, ...safe } = publicError(error);
+    structuredLog({ event: "vercel.request_failed", statusCode: status });
+    return withWebHeaders(webJson(status, { error: safe }), requestId, null);
+  }
+}
+
+export async function closeVercelRuntimeForTest(): Promise<void> {
+  if (process.env.NODE_ENV !== "test")
+    throw new Error("The Vercel runtime close hook is test-only.");
+  await mcpHandler.close();
+  await database.close();
+}
+
+async function authenticateWebRequest(
+  request: Request,
+  gate: ReturnType<typeof makeAuthGate>,
+): Promise<AuthInfo | Response> {
+  const authorization = request.headers.get("authorization") ?? undefined;
+  return gate(
+    new Request(audience, {
+      headers: authorization ? { authorization } : {},
+    }),
+  );
+}
+
+async function webAgentActor(request: Request) {
+  const auth = await authenticateWebRequest(request, restAuthGate);
+  if (auth instanceof Response) throw new AuthenticationError();
+  return { kind: "agent" as const, context: requestContext(auth) };
+}
+
+if (!serverless)
+  server.listen(port, host, () => {
+    console.log(`Normic authenticated MCP server listening at ${audience}`);
+  });
 
 async function authenticateRequest(
   request: IncomingMessage,
@@ -495,7 +731,7 @@ function serveAuthorizationMetadata(
       resource: audience,
       authorization_servers: [issuer],
       bearer_methods_supported: ["header"],
-      scopes_supported: API_SCOPES,
+      scopes_supported: oauthRequestScopes,
     });
     return true;
   }
@@ -537,8 +773,10 @@ async function shutdown(): Promise<void> {
   await database.close();
   server.close(() => process.exit(0));
 }
-process.once("SIGINT", () => void shutdown());
-process.once("SIGTERM", () => void shutdown());
+if (!serverless) {
+  process.once("SIGINT", () => void shutdown());
+  process.once("SIGTERM", () => void shutdown());
+}
 function commaSeparated(value: string | undefined): string[] {
   return (value ?? "")
     .split(",")
@@ -615,4 +853,104 @@ function structuredLog(fields: Record<string, unknown>): void {
       ...safe,
     }),
   );
+}
+
+async function webToNodeRequest(
+  request: Request,
+  path: string,
+): Promise<IncomingMessage> {
+  const bytes =
+    request.method === "GET" || request.method === "HEAD"
+      ? new Uint8Array()
+      : new Uint8Array(await request.arrayBuffer());
+  const headers = Object.fromEntries(request.headers.entries());
+  return {
+    method: request.method,
+    url: path,
+    headers,
+    async *[Symbol.asyncIterator]() {
+      if (bytes.byteLength) yield bytes;
+    },
+  } as unknown as IncomingMessage;
+}
+
+class CapturedServerResponse {
+  private status = 200;
+  private readonly headers = new Headers();
+  private body = new Uint8Array();
+  readonly response = {
+    writeHead: (
+      status: number,
+      headers: Record<string, string | number | readonly string[]> = {},
+    ) => {
+      this.status = status;
+      for (const [name, value] of Object.entries(headers))
+        this.headers.set(
+          name,
+          Array.isArray(value) ? value.join(", ") : String(value),
+        );
+      return this.response;
+    },
+    end: (value?: string | Uint8Array) => {
+      if (typeof value === "string")
+        this.body = new TextEncoder().encode(value);
+      else if (value) {
+        const copy = new Uint8Array(value.byteLength);
+        copy.set(value);
+        this.body = copy;
+      } else this.body = new Uint8Array();
+      return this.response;
+    },
+  } as unknown as ServerResponse;
+
+  toResponse(): Response {
+    return new Response(this.body, {
+      status: this.status,
+      headers: this.headers,
+    });
+  }
+}
+
+function webJson(status: number, value: unknown): Response {
+  return Response.json(value, {
+    status,
+    headers: {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+    },
+  });
+}
+
+function withWebHeaders(
+  response: Response,
+  requestId: string,
+  origin: string | null,
+  rateRemaining?: number,
+): Response {
+  const headers = new Headers(response.headers);
+  headers.set("x-request-id", requestId);
+  headers.set("x-content-type-options", "nosniff");
+  if (rateRemaining !== undefined)
+    headers.set("x-ratelimit-remaining", String(rateRemaining));
+  if (origin === "https://normic.tech") {
+    headers.set("access-control-allow-origin", origin);
+    headers.set("vary", "Origin");
+    headers.set(
+      "access-control-allow-methods",
+      "GET, POST, PATCH, DELETE, OPTIONS",
+    );
+    headers.set(
+      "access-control-allow-headers",
+      "Authorization, Content-Type, Idempotency-Key, MCP-Protocol-Version, MCP-Session-Id, X-Normic-Owner-Authorization",
+    );
+    headers.set(
+      "access-control-expose-headers",
+      "MCP-Session-Id, X-Request-Id, X-RateLimit-Remaining",
+    );
+  }
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }

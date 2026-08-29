@@ -42,7 +42,20 @@ await withDatabase(async (database) => {
         (COALESCE((m.data->>'allowStockTokenTrading')::boolean,false) AND
           (m.data->>'maxTradeUsdg' IS NULL OR m.data->>'maxDailyInvestmentUsdg' IS NULL OR
            m.data->>'maxStockTokenExposureUsdg' IS NULL OR m.data->>'minimumCashReserveUsdg' IS NULL OR
-           m.data->>'maxTotalDailySpendUsdg' IS NULL))) unsafe_mandates
+           m.data->>'maxTotalDailySpendUsdg' IS NULL))) unsafe_mandates,
+      (SELECT count(*)::int
+       FROM normic_oauth_agent_grants g
+       JOIN normic_oauth_clients oc ON oc.client_id=g.oauth_client_id
+       LEFT JOIN agents a ON a.id=g.agent_id
+       LEFT JOIN users u ON u.id=a.user_id
+       LEFT JOIN api_credentials c ON c.id=g.credential_id
+       WHERE oc.enabled AND g.revoked_at IS NULL AND (
+         a.id IS NULL OR a.status<>'active' OR
+         u.auth_issuer IS NULL OR u.auth_subject IS NULL OR
+         c.id IS NULL OR c.agent_id<>g.agent_id OR
+         c.issuer<>u.auth_issuer OR c.audience<>oc.audience OR
+         c.revoked_at IS NOT NULL OR (c.expires_at IS NOT NULL AND c.expires_at<=now())
+       )) invalid_oauth_grants
   `);
     if (!checks ||
         checks.demo_rows ||
@@ -57,7 +70,8 @@ await withDatabase(async (database) => {
         checks.invalid_autonomy_bindings ||
         checks.missing_action_history ||
         checks.active_terminal_reservations ||
-        checks.unsafe_mandates) {
+        checks.unsafe_mandates ||
+        checks.invalid_oauth_grants) {
         throw new Error(`Phase 6 database verification failed: ${JSON.stringify(checks)}`);
     }
     console.log(`Verified Phase 6 database: ${checks.companies} real companies, ${checks.services} services, ` +

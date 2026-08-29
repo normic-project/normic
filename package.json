@@ -30,6 +30,7 @@
     "smoke:lifecycle": "node scripts/smoke-lifecycle.mjs",
     "smoke:robinhood": "node scripts/smoke-robinhood.mjs",
     "smoke:web": "node scripts/smoke-web.mjs",
+    "smoke:vercel": "pnpm build:packages && pnpm --filter @normic/mcp build && node scripts/smoke-vercel.mjs",
     "smoke:isolated": "pnpm build:packages && pnpm --filter @normic/db build:scripts && pnpm --filter @normic/mcp build && node scripts/smoke-isolated.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check ."

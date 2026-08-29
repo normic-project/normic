@@ -6,7 +6,7 @@ const labels = {
   CORE_API: "Core API",
   MCP: "MCP",
   SERVICE_NETWORK: "Service Network",
-  ROBINHOOD_READS: "Robinhood RPC",
+  ROBINHOOD_READS: "Robinhood Reads",
   USDG_PAYMENTS: "USDG Payments",
   STOCK_TOKEN_TRADING: "Stock Token Trading",
   AUTONOMY: "Autonomous Financial Execution",
@@ -33,6 +33,10 @@ export default async function StatusPage() {
       <section className="metric-grid">
         <Status name="Database" value={readiness.components.DATABASE} />
         <Status name="OAuth" value={readiness.components.OAUTH} />
+        <Status
+          name="Robinhood RPC"
+          value={readiness.components.ROBINHOOD_RPC}
+        />
         {Object.entries(readiness.capabilities).map(([name, value]) => (
           <Status
             key={name}

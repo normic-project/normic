@@ -13,6 +13,7 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 export const agentFramework = pgEnum("agent_framework", [
   "claude-code",
@@ -339,6 +340,59 @@ export const apiCredentials = pgTable(
     uniqueIndex("api_credentials_secret_hash_unique").on(table.secretHash),
     index("api_credentials_agent_index").on(table.agentId, table.createdAt),
     index("api_credentials_prefix_index").on(table.prefix),
+  ],
+);
+
+export const oauthClients = pgTable(
+  "normic_oauth_clients",
+  {
+    clientId: uuid("client_id").primaryKey(),
+    audience: text("audience").notNull(),
+    enabled: boolean("enabled").notNull().default(false),
+    allowDynamicClients: boolean("allow_dynamic_clients")
+      .notNull()
+      .default(false),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("normic_oauth_clients_one_dynamic_policy")
+      .on(table.allowDynamicClients)
+      .where(sql`${table.enabled} AND ${table.allowDynamicClients}`),
+  ],
+);
+
+export const oauthAgentGrants = pgTable(
+  "normic_oauth_agent_grants",
+  {
+    oauthClientId: uuid("oauth_client_id")
+      .notNull()
+      .references(() => oauthClients.clientId, { onDelete: "restrict" }),
+    supabaseUserId: uuid("supabase_user_id").notNull(),
+    agentId: uuid("agent_id")
+      .notNull()
+      .references(() => agents.id, { onDelete: "restrict" }),
+    credentialId: uuid("credential_id")
+      .notNull()
+      .references(() => apiCredentials.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  },
+  (table) => [
+    primaryKey({ columns: [table.oauthClientId, table.supabaseUserId] }),
+    uniqueIndex("normic_oauth_agent_grants_credential_unique").on(
+      table.credentialId,
+    ),
+    index("normic_oauth_agent_grants_agent").on(
+      table.agentId,
+      table.oauthClientId,
+    ),
   ],
 );
 

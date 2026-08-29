@@ -84,7 +84,7 @@ NORMIC_AUTH_ISSUER=https://<your-oauth-issuer>
 NORMIC_AUTH_AUDIENCE=https://<your-api-host>/mcp
 NORMIC_AUTH_JWKS_URL=https://<your-oauth-issuer>/<jwks-path>
 NORMIC_OWNER_AUTH_ISSUER=https://<your-human-identity-issuer>
-NORMIC_OWNER_AUTH_AUDIENCE=<your-onboarding-resource-audience>
+NORMIC_OWNER_AUTH_AUDIENCE=https://<your-api-host>/onboarding
 NORMIC_OWNER_AUTH_JWKS_URL=https://<your-human-identity-issuer>/<jwks-path>
 NORMIC_NETWORK=robinhood-mainnet
 ROBINHOOD_MAINNET_ENABLED=true
@@ -115,7 +115,15 @@ set `NORMIC_AUTONOMOUS_FINANCIAL_EXECUTION_ENABLED=true` only after the separate
 autonomous-execution approval. These flags do not replace provider, contract,
 policy, eligibility, or custody checks.
 
-OAuth access tokens use RS256/ES256, exact issuer/audience, `iat`, `exp`, `sub=agent_id`, `normic_credential_id`, and a space-separated `scope`. Effective scopes are intersected with the active database credential. The provider must authorize the human-to-agent/credential mapping before minting claims. Revocation in Normic applies to both opaque credentials and these token grants. Normic implements resource-server verification, not an OAuth login/consent/token service. Provision the external provider before deployment.
+OAuth access tokens use ES256 with an exact issuer/audience and required
+`iat`/`exp`. For Supabase OAuth, `sub` and `user_id` remain the Supabase user
+UUID. A server-controlled Custom Access Token Hook must set the audience to the
+exact Normic MCP URL and add `normic_agent_id`, `normic_credential_id`, and a
+`normic_scopes` array. Owner flows additionally require a trusted
+`email_verified=true` claim. Normic binds the Supabase subject to the agent's
+stored owner identity and intersects custom scopes with the active database
+credential; revocation still wins. Standard Supabase OIDC scopes are used only
+for OAuth consent and identity data, not Normic authorization.
 
 Set explicit `MCP_ALLOWED_HOSTS` and `MCP_ALLOWED_ORIGIN_HOSTS` when remotely binding. TLS termination and trusted-proxy rules belong at the ingress. Never put credentials in query strings.
 

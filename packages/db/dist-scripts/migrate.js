@@ -10,6 +10,8 @@ const migrations = [
     "0006_phase4_finance.sql",
     "0007_phase5_stock_token_trading.sql",
     "0008_phase6_autonomous_operations.sql",
+    "0009_supabase_oauth_hook.sql",
+    "0010_dynamic_mcp_oauth_clients.sql",
 ];
 const migrationsDirectory = join(workspaceRoot(), "packages", "db", "migrations");
 await withDatabase(async (database) => {
@@ -24,7 +26,10 @@ await withDatabase(async (database) => {
         if (applied.has(migration))
             continue;
         const sql = await readFile(join(migrationsDirectory, migration), "utf8");
-        await database.exec(`BEGIN;\n${sql}\nINSERT INTO normic_migrations (name) VALUES ('${migration}');\nCOMMIT;`);
+        await database.transaction(async (transaction) => {
+            await transaction.exec(sql);
+            await transaction.query("INSERT INTO normic_migrations (name) VALUES ($1)", [migration]);
+        });
         console.log(`Applied ${migration}`);
     }
     if (migrations.every((migration) => applied.has(migration))) {

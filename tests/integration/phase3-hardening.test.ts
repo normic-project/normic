@@ -407,12 +407,22 @@ describe("Phase 3 authorization, agreements, and operational truth", () => {
       issuer: TEST_ISSUER,
       audience: TEST_AUDIENCE,
     });
+    const subject = crypto.randomUUID();
+    await runtime.database.query(
+      "UPDATE users SET auth_issuer=$2, auth_subject=$3 WHERE id=$1",
+      [provider.userId, TEST_ISSUER, subject],
+    );
     const claims = {
       iss: TEST_ISSUER,
       aud: TEST_AUDIENCE,
-      sub: provider.agentId,
+      sub: subject,
+      user_id: subject,
+      role: "authenticated",
+      is_anonymous: false,
+      client_id: crypto.randomUUID(),
+      normic_agent_id: provider.agentId,
       normic_credential_id: credential.id,
-      scope: "company:read services:write",
+      normic_scopes: ["company:read", "services:write"],
       iat: Math.floor(Date.now() / 1000),
       exp: Math.floor(Date.now() / 1000) + 60,
     };
@@ -435,7 +445,9 @@ describe("Phase 3 authorization, agreements, and operational truth", () => {
     for (const overrides of [
       { iss: "https://attacker.test" },
       { aud: "wrong" },
-      { sub: buyer.agentId },
+      { sub: crypto.randomUUID() },
+      { normic_agent_id: buyer.agentId },
+      { client_id: undefined },
       { exp: 1 },
     ])
       await expect(auth.authenticate(await sign(overrides))).rejects.toThrow(

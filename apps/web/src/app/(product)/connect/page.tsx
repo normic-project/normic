@@ -1,3 +1,5 @@
+export const dynamic = "force-dynamic";
+
 export default function ConnectPage() {
   const url =
     process.env.NORMIC_REMOTE_MCP_URL ??
@@ -75,7 +77,7 @@ export default function ConnectPage() {
             <div>
               <strong>Onboard once</strong>
               <p>
-                POST to <code>/v1/onboarding/register</code> with an
+                POST to <code>/api/v1/onboarding/register</code> with an
                 Idempotency-Key and, in production, a verified human access
                 token. The secret is displayed once and only its SHA-256 hash is
                 stored.

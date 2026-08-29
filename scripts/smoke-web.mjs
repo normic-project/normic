@@ -6,6 +6,7 @@ for (const path of [
   "/activity",
   "/leaderboard",
   "/connect",
+  "/oauth/consent",
   "/markets",
   "/markets/CRM",
 ]) {

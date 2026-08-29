@@ -31,12 +31,49 @@ export class OAuthTokenVerifier {
         cooldownDuration: 30_000,
       });
   }
+  async validateJwks(fetcher: typeof fetch = fetch) {
+    const response = await fetcher(this.config.jwksUrl, {
+      headers: { accept: "application/json" },
+      redirect: "error",
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (!response.ok)
+      throw new Error("The configured OAuth JWKS endpoint is unavailable.");
+    const value = (await response.json()) as {
+      keys?: {
+        kty?: unknown;
+        alg?: unknown;
+        use?: unknown;
+        kid?: unknown;
+        d?: unknown;
+        p?: unknown;
+        q?: unknown;
+      }[];
+    };
+    if (
+      !Array.isArray(value.keys) ||
+      !value.keys.some(
+        (key) =>
+          key.kty === "EC" &&
+          key.alg === "ES256" &&
+          key.use === "sig" &&
+          typeof key.kid === "string" &&
+          key.kid.length > 0 &&
+          !key.d &&
+          !key.p &&
+          !key.q,
+      )
+    )
+      throw new Error(
+        "The configured OAuth JWKS does not contain a public ES256 signing key.",
+      );
+  }
   async verify(token: string) {
     if (token.length > 16_384) throw new AuthenticationError();
     const { payload } = await jwtVerify(token, this.keys, {
       issuer: this.config.issuer,
       audience: this.config.audience,
-      algorithms: ["RS256", "ES256"],
+      algorithms: ["ES256"],
       requiredClaims: ["sub", "iat", "exp"],
       clockTolerance: 5,
     });
@@ -45,7 +82,15 @@ export class OAuthTokenVerifier {
   async verifyOwner(token: string): Promise<VerifiedOwner> {
     try {
       const payload = await this.verify(token);
-      if (payload.email_verified !== true || !payload.sub || !payload.iss)
+      if (
+        payload.email_verified !== true ||
+        !payload.sub ||
+        payload.user_id !== payload.sub ||
+        payload.role !== "authenticated" ||
+        payload.is_anonymous === true ||
+        !z.uuid().safeParse(payload.client_id).success ||
+        !payload.iss
+      )
         throw new AuthenticationError();
       return {
         issuer: payload.iss,
@@ -73,7 +118,16 @@ export class OAuthAgentAuthenticator {
   async authenticate(token: string): Promise<AuthPrincipal> {
     try {
       const payload = await this.verifier.verify(token);
-      const agentId = z.uuid().parse(payload.sub);
+      const subject = z.uuid().parse(payload.sub);
+      if (z.uuid().parse(payload.user_id) !== subject)
+        throw new AuthenticationError();
+      if (
+        payload.role !== "authenticated" ||
+        payload.is_anonymous === true ||
+        !z.uuid().safeParse(payload.client_id).success
+      )
+        throw new AuthenticationError();
+      const agentId = z.uuid().parse(payload.normic_agent_id);
       const credentialId = z.uuid().parse(payload.normic_credential_id);
       const credential = await this.repository.getCredential(credentialId);
       const now = new Date();
@@ -88,8 +142,18 @@ export class OAuthAgentAuthenticator {
         throw new AuthenticationError();
       const agent = await this.repository.getAgent(agentId);
       if (!agent || agent.status !== "active") throw new AuthenticationError();
-      const grants =
-        typeof payload.scope === "string" ? payload.scope.split(" ") : [];
+      const owner = await this.repository.getUser(agent.userId);
+      if (
+        !owner ||
+        owner.authIssuer !== this.config.issuer ||
+        owner.authSubject !== subject
+      )
+        throw new AuthenticationError();
+      const grants = Array.isArray(payload.normic_scopes)
+        ? payload.normic_scopes.filter(
+            (scope): scope is string => typeof scope === "string",
+          )
+        : [];
       const scopes = credential.scopes.filter((scope) =>
         grants.includes(scope),
       );

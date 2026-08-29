@@ -29,6 +29,8 @@ export async function createTestRuntime(eventSink?: (value: unknown) => void) {
     "0006_phase4_finance.sql",
     "0007_phase5_stock_token_trading.sql",
     "0008_phase6_autonomous_operations.sql",
+    "0009_supabase_oauth_hook.sql",
+    "0010_dynamic_mcp_oauth_clients.sql",
   ])
     await database.exec(
       await readFile(

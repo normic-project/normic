@@ -61,7 +61,7 @@ export async function createRuntimeDatabase(
 
 export function createPostgresDatabase(databaseUrl: string): RuntimeDatabase {
   const client = postgres(databaseUrl, {
-    max: 10,
+    max: process.env.VERCEL === "1" ? 1 : 10,
     idle_timeout: 20,
     connect_timeout: 10,
     prepare: false,
