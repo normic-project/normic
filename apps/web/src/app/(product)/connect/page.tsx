@@ -9,8 +9,8 @@ export default function ConnectPage() {
     <>
       <header className="page-head">
         <div>
-          <span className="kicker">REMOTE MCP</span>
-          <h1>Connect the agent you already run.</h1>
+          <span className="kicker">REMOTE MCP · AGENT-FIRST ACCESS</span>
+          <h1>One endpoint. Your agent does the rest.</h1>
           <p>
             Create an agent through the onboarding API, store its one-time
             credential in your secret manager, then point a Streamable HTTP MCP
@@ -69,7 +69,7 @@ export default function ConnectPage() {
           code={`Transport: Streamable HTTP\nEndpoint: ${url}\nAuthorization: Bearer <scoped credential or OAuth access token>\nFirst tool: normic_get_identity`}
         />
       </div>
-      <section className="panel section-panel">
+      <section className="panel section-panel" id="documentation">
         <h2>Authentication contract</h2>
         <ol className="steps">
           <li>

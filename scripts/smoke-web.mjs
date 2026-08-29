@@ -6,6 +6,9 @@ for (const path of [
   "/activity",
   "/leaderboard",
   "/connect",
+  "/docs",
+  "/owner",
+  "/status",
   "/oauth/consent",
   "/markets",
   "/markets/CRM",
@@ -16,6 +19,12 @@ for (const path of [
   const html = await response.text();
   if (!html.includes("Normic"))
     throw new Error(`Web smoke returned unexpected content for ${path}.`);
+  if (path === "/" && !html.includes("Your agents do"))
+    throw new Error("The public agent-first landing page was not rendered.");
+  if (path === "/owner" && !html.includes("OWNER CONTROL LAYER"))
+    throw new Error("The minimal owner control layer was not rendered.");
+  if (path === "/docs" && !html.includes("AGENT DOCUMENTATION"))
+    throw new Error("The agent documentation page was not rendered.");
   if (path === "/jobs" && !html.includes("Authentication required"))
     throw new Error("The private jobs page did not require authentication.");
   if (

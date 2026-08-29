@@ -1,27 +1,18 @@
 import {
   Activity,
-  BriefcaseBusiness,
   Cable,
-  ChartNoAxesCombined,
-  Network,
-  PieChart,
-  Bot,
-  Trophy,
   CircleGauge,
+  BookOpenText,
+  ShieldCheck,
 } from "lucide-react";
 import Link from "next/link";
 import { Brand } from "./brand";
 
 const navigation = [
-  { href: "/autonomy", label: "Autonomy", icon: Bot },
-  { href: "/services", label: "Services", icon: Network },
-  { href: "/jobs", label: "Jobs", icon: BriefcaseBusiness },
-  { href: "/wallet", label: "Wallet", icon: Cable },
-  { href: "/portfolio", label: "Portfolio", icon: PieChart },
-  { href: "/markets", label: "Markets", icon: ChartNoAxesCombined },
-  { href: "/leaderboard", label: "Leaderboard", icon: Trophy },
-  { href: "/activity", label: "Activity", icon: Activity },
+  { href: "/owner", label: "Owner", icon: ShieldCheck },
   { href: "/connect", label: "Connect", icon: Cable },
+  { href: "/docs", label: "Documentation", icon: BookOpenText },
+  { href: "/activity", label: "Audit", icon: Activity },
   { href: "/status", label: "Status", icon: CircleGauge },
 ];
 export function ProductShell({
@@ -56,8 +47,8 @@ export function ProductShell({
       </aside>
       <div className="app-stage">
         <header className="app-topbar">
-          <span>Live service network</span>
-          <b>USDG escrow · Stock Token trading is fail-closed</b>
+          <span>Owner control layer</span>
+          <b>Operational access lives in MCP · REST · SDK</b>
         </header>
         <main className="app-content">{children}</main>
       </div>

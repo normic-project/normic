@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type {
   ActionHistory,
   AgentHeartbeat,
@@ -24,18 +24,30 @@ type Overview = {
 export function AutonomyConsole({
   paymentsReady,
   tradingReady,
+  initialCompanyId = "",
+  initialAgentToken = "",
+  initialOwnerToken = "",
+  compactAuth = false,
 }: {
   paymentsReady: boolean;
   tradingReady: boolean;
+  initialCompanyId?: string;
+  initialAgentToken?: string;
+  initialOwnerToken?: string;
+  compactAuth?: boolean;
 }) {
-  const [companyId, setCompanyId] = useState("");
-  const [agentToken, setAgentToken] = useState("");
-  const [ownerToken, setOwnerToken] = useState("");
+  const [companyId, setCompanyId] = useState(initialCompanyId);
+  const [agentToken, setAgentToken] = useState(initialAgentToken);
+  const [ownerToken, setOwnerToken] = useState(initialOwnerToken);
   const [overview, setOverview] = useState<Overview | null>(null);
   const [draft, setDraft] = useState<OwnerMandate | null>(null);
   const [message, setMessage] = useState(
     "Connect a scoped agent credential to load live state.",
   );
+
+  useEffect(() => setCompanyId(initialCompanyId), [initialCompanyId]);
+  useEffect(() => setAgentToken(initialAgentToken), [initialAgentToken]);
+  useEffect(() => setOwnerToken(initialOwnerToken), [initialOwnerToken]);
 
   async function command<T>(
     name: string,
@@ -181,45 +193,41 @@ export function AutonomyConsole({
 
   return (
     <div className="stack-lg">
-      <section className="panel">
+      <section className={compactAuth ? "panel compact-auth-panel" : "panel"}>
         <div className="section-heading">
           <div>
             <span className="kicker">AUTHENTICATED CONTROL PLANE</span>
             <h2>Connect live identities</h2>
           </div>
         </div>
-        <div className="form-grid">
-          <label>
-            Company ID
-            <input
-              value={companyId}
-              onChange={(event) => setCompanyId(event.target.value)}
-            />
-          </label>
-          <label>
-            Agent API credential
-            <input
-              type="password"
-              autoComplete="off"
-              value={agentToken}
-              onChange={(event) => setAgentToken(event.target.value)}
-            />
-          </label>
-          <label>
-            Owner access token
-            <input
-              type="password"
-              autoComplete="off"
-              value={ownerToken}
-              onChange={(event) => setOwnerToken(event.target.value)}
-            />
-          </label>
-        </div>
+        {compactAuth ? (
+          <p className="owner-linked-session">
+            Owner session and agent credential are linked from this console.
+            Tokens are never rendered or logged.
+          </p>
+        ) : (
+          <div className="form-grid">
+            <label>
+              Company ID
+              <input value={companyId} onChange={(event) => setCompanyId(event.target.value)} />
+            </label>
+            <label>
+              Agent API credential
+              <input type="password" autoComplete="off" value={agentToken} onChange={(event) => setAgentToken(event.target.value)} />
+            </label>
+            <label>
+              Owner access token
+              <input type="password" autoComplete="off" value={ownerToken} onChange={(event) => setOwnerToken(event.target.value)} />
+            </label>
+          </div>
+        )}
         <div className="button-row">
           <button onClick={() => void load()}>Load live state</button>
-          <button className="secondary" onClick={() => void heartbeat()}>
-            Send heartbeat
-          </button>
+          {!compactAuth ? (
+            <button className="secondary" onClick={() => void heartbeat()}>
+              Send heartbeat
+            </button>
+          ) : null}
         </div>
         <p className="source-note">{message}</p>
       </section>
@@ -416,8 +424,8 @@ export function AutonomyConsole({
             </section>
           ) : null}
 
-          <section className="split-grid">
-            <div className="panel">
+          <section className={compactAuth ? "panel" : "split-grid"}>
+            <div className={compactAuth ? undefined : "panel"}>
               <h2>Pending approvals</h2>
               {overview.approvals.length ? (
                 overview.approvals.map(({ plan }) => (
@@ -443,24 +451,26 @@ export function AutonomyConsole({
                 <p className="empty-state">No pending approvals.</p>
               )}
             </div>
-            <div className="panel">
-              <h2>Real opportunities</h2>
-              {overview.opportunities.length ? (
-                overview.opportunities.map((opportunity) => (
-                  <article className="list-row" key={opportunity.id}>
-                    <div>
-                      <strong>{opportunity.title}</strong>
-                      <p>{opportunity.summary}</p>
-                    </div>
-                    <span className="tag">{opportunity.status}</span>
-                  </article>
-                ))
-              ) : (
-                <p className="empty-state">
-                  No opportunities exist in current Normic state.
-                </p>
-              )}
-            </div>
+            {!compactAuth ? (
+              <div className="panel">
+                <h2>Real opportunities</h2>
+                {overview.opportunities.length ? (
+                  overview.opportunities.map((opportunity) => (
+                    <article className="list-row" key={opportunity.id}>
+                      <div>
+                        <strong>{opportunity.title}</strong>
+                        <p>{opportunity.summary}</p>
+                      </div>
+                      <span className="tag">{opportunity.status}</span>
+                    </article>
+                  ))
+                ) : (
+                  <p className="empty-state">
+                    No opportunities exist in current Normic state.
+                  </p>
+                )}
+              </div>
+            ) : null}
           </section>
 
           <section className="panel">
