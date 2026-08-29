@@ -1,0 +1,33 @@
+{
+  "name": "@normic/db",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "build:scripts": "tsc -p tsconfig.scripts.json",
+    "migrate": "pnpm build && pnpm build:scripts && node --env-file-if-exists=../../.env dist-scripts/migrate.js",
+    "seed": "pnpm build && pnpm build:scripts && node --env-file-if-exists=../../.env dist-scripts/seed.js",
+    "verify": "pnpm build && pnpm build:scripts && node --env-file-if-exists=../../.env dist-scripts/verify.js"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "^0.5.8",
+    "@normic/core": "workspace:*",
+    "drizzle-orm": "^0.45.2",
+    "postgres": "^3.4.9"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "drizzle-kit": "^0.31.10",
+    "typescript": "^6.0.0"
+  }
+}

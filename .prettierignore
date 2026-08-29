@@ -1,0 +1,13 @@
+.next
+.next-dev
+dist
+dist-*
+coverage
+.data
+node_modules
+node_modules.stalled-*
+.pnpm-store
+pnpm-lock.yaml
+work
+outputs
+packages/contracts/artifacts
