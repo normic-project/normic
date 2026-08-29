@@ -82,19 +82,17 @@ export class OAuthTokenVerifier {
   async verifyOwner(token: string): Promise<VerifiedOwner> {
     try {
       const payload = await this.verify(token);
+      const subject = z.uuid().parse(payload.sub);
       if (
         payload.email_verified !== true ||
-        !payload.sub ||
-        payload.user_id !== payload.sub ||
         payload.role !== "authenticated" ||
         payload.is_anonymous === true ||
-        !z.uuid().safeParse(payload.client_id).success ||
         !payload.iss
       )
         throw new AuthenticationError();
       return {
         issuer: payload.iss,
-        subject: payload.sub,
+        subject,
         email: z.email().parse(payload.email).toLowerCase(),
       };
     } catch {

@@ -20,7 +20,7 @@ const productionEnvironment = (): NodeJS.ProcessEnv => ({
   NORMIC_AUTH_AUDIENCE: "https://api.normic.example/mcp",
   NORMIC_AUTH_JWKS_URL: "https://identity.normic.example/jwks.json",
   NORMIC_OWNER_AUTH_ISSUER: "https://owners.normic.example",
-  NORMIC_OWNER_AUTH_AUDIENCE: "https://api.normic.example/onboarding",
+  NORMIC_OWNER_AUTH_AUDIENCE: "authenticated",
   NORMIC_OWNER_AUTH_JWKS_URL: "https://owners.normic.example/jwks.json",
   NORMIC_NETWORK: "robinhood-mainnet",
   ROBINHOOD_MAINNET_ENABLED: "true",
@@ -39,6 +39,14 @@ describe("Phase 6.5 production readiness", () => {
     env.ROBINHOOD_RPC_URL = "https://rpc.mainnet.chain.robinhood.com";
     expect(() => assertProductionConfiguration(env)).toThrow(
       /ROBINHOOD_RPC_URL/,
+    );
+  });
+
+  it("requires the standard Supabase audience for owner sessions", () => {
+    const env = productionEnvironment();
+    env.NORMIC_OWNER_AUTH_AUDIENCE = env.NORMIC_AUTH_AUDIENCE;
+    expect(() => assertProductionConfiguration(env)).toThrow(
+      /NORMIC_OWNER_AUTH_AUDIENCE/,
     );
   });
 

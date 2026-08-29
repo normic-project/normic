@@ -108,8 +108,17 @@ describe("Supabase Custom Access Token Hook", () => {
 
   it("does not alter unrelated Supabase login or OAuth-client tokens", async () => {
     const login = {
-      ...event,
+      user_id: subject,
       authentication_method: "password",
+      claims: {
+        iss: TEST_ISSUER,
+        aud: "authenticated",
+        sub: subject,
+        role: "authenticated",
+        email_verified: true,
+        exp: 2_000_000_000,
+        iat: 1_900_000_000,
+      },
     };
     expect(await invoke(login)).toEqual(login);
     const unrelated = {

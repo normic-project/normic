@@ -119,7 +119,6 @@ export function productionConfigurationBlockers(env: NodeJS.ProcessEnv) {
     ...invalidUrl(env, "NORMIC_AUTH_AUDIENCE"),
     ...invalidUrl(env, "NORMIC_AUTH_JWKS_URL"),
     ...invalidUrl(env, "NORMIC_OWNER_AUTH_ISSUER"),
-    ...invalidUrl(env, "NORMIC_OWNER_AUTH_AUDIENCE"),
     ...invalidUrl(env, "NORMIC_OWNER_AUTH_JWKS_URL"),
     ...invalidUrl(env, "ROBINHOOD_RPC_URL", {
       https: true,
@@ -132,6 +131,14 @@ export function productionConfigurationBlockers(env: NodeJS.ProcessEnv) {
         "DEVELOPMENT_AUTH_ENABLED",
         "NORMIC_DEV_AUTH_ENABLED",
         "Development authentication must be disabled.",
+      ),
+    );
+  if (env.NORMIC_OWNER_AUTH_AUDIENCE !== "authenticated")
+    blockers.push(
+      blocker(
+        "WRONG_OWNER_AUTH_AUDIENCE",
+        "NORMIC_OWNER_AUTH_AUDIENCE",
+        'Supabase owner sessions must use audience "authenticated".',
       ),
     );
   if (env.NORMIC_NETWORK !== "robinhood-mainnet")

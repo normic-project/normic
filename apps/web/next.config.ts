@@ -6,6 +6,7 @@ if (process.env.VERCEL_ENV === "production") {
     NORMIC_PUBLIC_ORIGIN: "https://normic.tech",
     NORMIC_REMOTE_MCP_URL: "https://normic.tech/mcp",
     NORMIC_AUTH_AUDIENCE: "https://normic.tech/mcp",
+    NORMIC_OWNER_AUTH_AUDIENCE: "authenticated",
   } as const;
   for (const [name, value] of Object.entries(expected)) {
     if (process.env[name] !== value)

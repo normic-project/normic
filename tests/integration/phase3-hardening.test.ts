@@ -461,4 +461,97 @@ describe("Phase 3 authorization, agreements, and operational truth", () => {
       JSON.stringify(await runtime.repository.listAuditEvents()),
     ).not.toContain(token);
   });
+
+  it("onboards a verified standard Supabase owner session without MCP claims", async () => {
+    const keys = await crypto.subtle.generateKey(
+      { name: "ECDSA", namedCurve: "P-256" },
+      false,
+      ["sign", "verify"],
+    );
+    const verifier = new OAuthTokenVerifier({
+      issuer: TEST_ISSUER,
+      audience: "authenticated",
+      jwksUrl: `${TEST_ISSUER}/jwks`,
+      keyResolver: async () => keys.publicKey,
+    });
+    const subject = crypto.randomUUID();
+    const claims = {
+      iss: TEST_ISSUER,
+      aud: "authenticated",
+      sub: subject,
+      role: "authenticated",
+      is_anonymous: false,
+      email: "first-owner@example.com",
+      email_verified: true,
+      iat: Math.floor(Date.now() / 1000),
+      exp: Math.floor(Date.now() / 1000) + 60,
+    };
+    const sign = async (overrides = {}) => {
+      const header = Buffer.from(
+        JSON.stringify({ alg: "ES256", typ: "JWT" }),
+      ).toString("base64url");
+      const payload = Buffer.from(
+        JSON.stringify({ ...claims, ...overrides }),
+      ).toString("base64url");
+      const signature = await crypto.subtle.sign(
+        { name: "ECDSA", hash: "SHA-256" },
+        keys.privateKey,
+        new TextEncoder().encode(`${header}.${payload}`),
+      );
+      return `${header}.${payload}.${Buffer.from(signature).toString("base64url")}`;
+    };
+
+    const owner = await verifier.verifyOwner(await sign());
+    expect(owner).toEqual({
+      issuer: TEST_ISSUER,
+      subject,
+      email: claims.email,
+    });
+    const registration = await runtime.economy.bootstrapAgent(
+      {
+        creatorEmail: claims.email,
+        creatorName: "First owner",
+        agentName: "First production agent",
+        handle: "first_production_agent",
+        framework: "custom",
+        companyName: "First production company",
+        companySlug: "first-production-company",
+        description: "A legitimate company created by verified onboarding.",
+        industry: "Services",
+      },
+      "verified-owner-onboarding",
+      owner,
+    );
+    const [mapped] = await runtime.database.query<{
+      auth_issuer: string;
+      auth_subject: string;
+    }>("SELECT auth_issuer,auth_subject FROM users WHERE id=$1", [
+      registration.identity.company.ownerUserId,
+    ]);
+    expect(mapped).toEqual({
+      auth_issuer: TEST_ISSUER,
+      auth_subject: subject,
+    });
+    expect(registration.identity.agent.status).toBe("active");
+    expect(registration.credential.scopes).toEqual([
+      "company:read",
+      "company:write",
+      "services:read",
+      "services:write",
+      "jobs:read",
+      "jobs:write",
+      "transactions:read",
+      "markets:read",
+    ]);
+    expect(registration.secretShown).toBe(true);
+
+    for (const overrides of [
+      { aud: TEST_AUDIENCE },
+      { email_verified: false },
+      { exp: 1 },
+    ])
+      await expect(verifier.verifyOwner(await sign(overrides))).rejects.toThrow(
+        /verified owner session/,
+      );
+  });
 });
