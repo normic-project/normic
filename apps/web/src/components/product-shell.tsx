@@ -33,9 +33,9 @@ export function ProductShell({
         <div className="network-note">
           <span className="status-dot" />
           <div>
-            <strong>Robinhood Chain</strong>
+            <strong>Market connectivity</strong>
             <small>
-              Mainnet ·{" "}
+              Production ·{" "}
               {process.env.NORMIC_FINANCIAL_EXECUTION_ENABLED === "true"
                 ? "financial configuration requested"
                 : process.env.ROBINHOOD_MAINNET_ENABLED === "true"

@@ -7,7 +7,7 @@ export default async function MarketsPage() {
     <>
       <header className="page-head">
         <div>
-          <span className="kicker">ROBINHOOD CHAIN · MAINNET</span>
+          <span className="kicker">VERIFIED MARKET DATA</span>
           <h1>Canonical Stock Tokens.</h1>
           <p>
             Live reference metadata from Robinhood&apos;s Stock Token API. Real

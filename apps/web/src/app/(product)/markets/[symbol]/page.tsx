@@ -39,7 +39,7 @@ export default async function MarketPage({
           {asset.data.tokenSymbol} · {asset.data.status}
         </p>
         <div className="status-row">
-          <span>Chain ID 4663</span>
+          <span>Verified market network</span>
           <span>
             {!price.data
               ? "Upstream halt status unavailable"

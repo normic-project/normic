@@ -6,7 +6,7 @@ const labels = {
   CORE_API: "Core API",
   MCP: "MCP",
   SERVICE_NETWORK: "Service Network",
-  ROBINHOOD_READS: "Robinhood Reads",
+  ROBINHOOD_READS: "Market Reads",
   USDG_PAYMENTS: "USDG Payments",
   STOCK_TOKEN_TRADING: "Stock Token Trading",
   AUTONOMY: "Autonomous Financial Execution",
@@ -28,15 +28,15 @@ export default async function StatusPage() {
       </header>
       <div className="notice warning">
         <strong>Public beta: {readiness.publicBeta}</strong>
-        <p>Robinhood Chain Mainnet · chain ID {readiness.chainId}</p>
+        <p>
+          Production market connectivity and financial execution are evaluated
+          separately.
+        </p>
       </div>
       <section className="metric-grid">
         <Status name="Database" value={readiness.components.DATABASE} />
         <Status name="OAuth" value={readiness.components.OAUTH} />
-        <Status
-          name="Robinhood RPC"
-          value={readiness.components.ROBINHOOD_RPC}
-        />
+        <Status name="Market RPC" value={readiness.components.ROBINHOOD_RPC} />
         {Object.entries(readiness.capabilities).map(([name, value]) => (
           <Status
             key={name}
@@ -66,10 +66,20 @@ function Status({
       <small>
         {value.blockers.length
           ? value.blockers
-              .map((item) => `${item.code}: ${item.dependency}`)
+              .map(
+                (item) => `${item.code}: ${publicDependency(item.dependency)}`,
+              )
               .join(" · ")
           : "Configured and available"}
       </small>
     </article>
   );
+}
+
+function publicDependency(value: string) {
+  return value
+    .replaceAll(/Supabase/gi, "identity provider")
+    .replaceAll(/Robinhood Chain(?: Mainnet)?/gi, "market network")
+    .replaceAll(/chain ID 4663/gi, "configured network")
+    .replaceAll(/4663/g, "configured network");
 }

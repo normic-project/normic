@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type {
   ActionHistory,
   AgentHeartbeat,
@@ -44,10 +44,9 @@ export function AutonomyConsole({
   const [message, setMessage] = useState(
     "Connect a scoped agent credential to load live state.",
   );
-
-  useEffect(() => setCompanyId(initialCompanyId), [initialCompanyId]);
-  useEffect(() => setAgentToken(initialAgentToken), [initialAgentToken]);
-  useEffect(() => setOwnerToken(initialOwnerToken), [initialOwnerToken]);
+  const activeCompanyId = compactAuth ? initialCompanyId : companyId;
+  const activeAgentToken = compactAuth ? initialAgentToken : agentToken;
+  const activeOwnerToken = compactAuth ? initialOwnerToken : ownerToken;
 
   async function command<T>(
     name: string,
@@ -55,7 +54,7 @@ export function AutonomyConsole({
     mode: "agent" | "owner" = "agent",
     mutation = false,
   ) {
-    const token = mode === "owner" ? ownerToken : agentToken;
+    const token = mode === "owner" ? activeOwnerToken : activeAgentToken;
     const response = await fetch(`/api/autonomy/${name}`, {
       method: "POST",
       headers: {
@@ -77,25 +76,51 @@ export function AutonomyConsole({
   async function load() {
     try {
       setMessage("Loading verified autonomy state…");
+      const readMode = compactAuth ? "owner" : "agent";
       const [autonomy, treasury, capital, risk, opportunities, history] =
         await Promise.all([
-          command<Overview["autonomy"]>("get_autonomy", { companyId }),
-          command<Record<string, unknown>>("get_treasury", { companyId }),
-          command<Record<string, unknown>>("get_capital_sources", {
-            companyId,
-          }),
-          command<AutonomyRiskStatus>("get_risk_status", { companyId }),
-          command<Opportunity[]>("get_opportunities", { companyId, limit: 50 }),
-          command<ActionHistory[]>("get_action_history", {
-            companyId,
-            limit: 50,
-          }),
+          command<Overview["autonomy"]>(
+            "get_autonomy",
+            { companyId: activeCompanyId },
+            readMode,
+          ),
+          command<Record<string, unknown>>(
+            "get_treasury",
+            { companyId: activeCompanyId },
+            readMode,
+          ),
+          command<Record<string, unknown>>(
+            "get_capital_sources",
+            {
+              companyId: activeCompanyId,
+            },
+            readMode,
+          ),
+          command<AutonomyRiskStatus>(
+            "get_risk_status",
+            { companyId: activeCompanyId },
+            readMode,
+          ),
+          compactAuth
+            ? Promise.resolve([] as Opportunity[])
+            : command<Opportunity[]>("get_opportunities", {
+                companyId: activeCompanyId,
+                limit: 50,
+              }),
+          command<ActionHistory[]>(
+            "get_action_history",
+            {
+              companyId: activeCompanyId,
+              limit: 50,
+            },
+            readMode,
+          ),
         ]);
       let approvals: Overview["approvals"] = [];
-      if (ownerToken)
+      if (activeOwnerToken)
         approvals = await command<Overview["approvals"]>(
           "get_pending_approvals",
-          { companyId },
+          { companyId: activeCompanyId },
           "owner",
         );
       const value = {
@@ -129,7 +154,7 @@ export function AutonomyConsole({
       await command(
         "heartbeat",
         {
-          companyId,
+          companyId: activeCompanyId,
           sessionId: crypto.randomUUID(),
           status: "ONLINE",
           currentJobId: null,
@@ -164,7 +189,12 @@ export function AutonomyConsole({
 
   async function pause() {
     try {
-      await command("pause_autonomy", { companyId }, "owner", true);
+      await command(
+        "pause_autonomy",
+        { companyId: activeCompanyId },
+        "owner",
+        true,
+      );
       await load();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Pause failed.");
@@ -209,15 +239,28 @@ export function AutonomyConsole({
           <div className="form-grid">
             <label>
               Company ID
-              <input value={companyId} onChange={(event) => setCompanyId(event.target.value)} />
+              <input
+                value={companyId}
+                onChange={(event) => setCompanyId(event.target.value)}
+              />
             </label>
             <label>
               Agent API credential
-              <input type="password" autoComplete="off" value={agentToken} onChange={(event) => setAgentToken(event.target.value)} />
+              <input
+                type="password"
+                autoComplete="off"
+                value={agentToken}
+                onChange={(event) => setAgentToken(event.target.value)}
+              />
             </label>
             <label>
               Owner access token
-              <input type="password" autoComplete="off" value={ownerToken} onChange={(event) => setOwnerToken(event.target.value)} />
+              <input
+                type="password"
+                autoComplete="off"
+                value={ownerToken}
+                onChange={(event) => setOwnerToken(event.target.value)}
+              />
             </label>
           </div>
         )}
@@ -258,7 +301,7 @@ export function AutonomyConsole({
                   ? balance.usdg?.units
                   : "Unavailable"}
               </strong>
-              <small>Robinhood Chain finalized source</small>
+              <small>Finalized settlement source</small>
             </article>
             <article className="metric-card">
               <span>Investable capital</span>

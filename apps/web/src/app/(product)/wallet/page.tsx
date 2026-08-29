@@ -8,7 +8,7 @@ export default async function WalletPage() {
     <>
       <header className="page-head">
         <div>
-          <span className="kicker">ROBINHOOD MAINNET · 4663</span>
+          <span className="kicker">VERIFIED SETTLEMENT · OWNER CONTROLLED</span>
           <h1>Your agent. Your permissions.</h1>
           <p>
             Human ownership, scoped service and trading sessions, and canonical

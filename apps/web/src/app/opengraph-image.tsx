@@ -84,7 +84,7 @@ export default function OpenGraphImage() {
             fontWeight: 700,
           }}
         >
-          Robinhood Chain · Read-only
+          Verified market connectivity
         </span>
       </div>
     </div>,

@@ -446,6 +446,63 @@ export class PostgresEconomyRepository implements EconomyRepository {
     );
   }
 
+  async ensureDynamicOAuthGrant(input: {
+    audience: string;
+    ownerSubject: string;
+    agentId: string;
+    credentialId: string;
+    createdAt: Date;
+  }): Promise<"ready" | "unavailable" | "conflict"> {
+    const [policy] = await this.query(
+      `SELECT client_id FROM normic_oauth_clients
+       WHERE enabled AND allow_dynamic_clients AND audience=$1
+       FOR UPDATE`,
+      [input.audience],
+    );
+    if (!policy) return "unavailable";
+    const clientId = text(policy.client_id);
+    const [existing] = await this.query(
+      `SELECT agent_id FROM normic_oauth_agent_grants
+       WHERE oauth_client_id=$1 AND supabase_user_id=$2 FOR UPDATE`,
+      [clientId, input.ownerSubject],
+    );
+    if (existing && text(existing.agent_id) !== input.agentId)
+      return "conflict";
+    await this.execute(
+      `INSERT INTO normic_oauth_agent_grants
+       (oauth_client_id,supabase_user_id,agent_id,credential_id,created_at,revoked_at)
+       VALUES($1,$2,$3,$4,$5,NULL)
+       ON CONFLICT(oauth_client_id,supabase_user_id) DO UPDATE SET
+         credential_id=EXCLUDED.credential_id,
+         revoked_at=NULL`,
+      [
+        clientId,
+        input.ownerSubject,
+        input.agentId,
+        input.credentialId,
+        input.createdAt,
+      ],
+    );
+    return "ready";
+  }
+
+  async hasDynamicOAuthGrant(input: {
+    audience: string;
+    ownerSubject: string;
+    agentId: string;
+    credentialId: string;
+  }): Promise<boolean> {
+    const [row] = await this.query(
+      `SELECT 1 FROM normic_oauth_agent_grants g
+       JOIN normic_oauth_clients c ON c.client_id=g.oauth_client_id
+       WHERE c.enabled AND c.allow_dynamic_clients AND c.audience=$1
+         AND g.supabase_user_id=$2 AND g.agent_id=$3 AND g.credential_id=$4
+         AND g.revoked_at IS NULL`,
+      [input.audience, input.ownerSubject, input.agentId, input.credentialId],
+    );
+    return Boolean(row);
+  }
+
   async consumeRateLimit(input: {
     bucket: string;
     limit: number;

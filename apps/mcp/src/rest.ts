@@ -29,20 +29,50 @@ export async function handlePublicRestRequest(
   verifyOwner?: (token: string) => Promise<VerifiedOwner>,
 ): Promise<boolean> {
   const url = new URL(request.url ?? "/", "http://localhost");
-  if (request.method !== "POST" || url.pathname !== "/v1/onboarding/register")
+  const revokeMatch = url.pathname.match(
+    /^\/v1\/onboarding\/credentials\/([0-9a-f-]+)\/revoke$/i,
+  );
+  const isRegistration =
+    request.method === "POST" && url.pathname === "/v1/onboarding/register";
+  const isConnection =
+    request.method === "POST" && url.pathname === "/v1/onboarding/connect";
+  const isConnectionState =
+    request.method === "GET" && url.pathname === "/v1/onboarding/connection";
+  const isOwnerRevoke = request.method === "POST" && Boolean(revokeMatch);
+  if (!isRegistration && !isConnection && !isConnectionState && !isOwnerRevoke)
     return false;
   return guarded(response, async () => {
     const token =
       request.headers.authorization?.match(/^Bearer (\S+)$/i)?.[1] ?? "";
     const owner = verifyOwner ? await verifyOwner(token) : undefined;
+    if (!isRegistration && !owner)
+      throw new DomainError(
+        "Verified owner authentication is required.",
+        "UNAUTHENTICATED",
+      );
+    if (isConnectionState) {
+      json(response, 200, await economy.getOwnerConnection(owner!));
+      return;
+    }
+    const key = idempotencyKey(request);
+    if (isOwnerRevoke) {
+      json(
+        response,
+        200,
+        await economy.revokeOwnerCredential(owner!, revokeMatch![1]!, key),
+      );
+      return;
+    }
     json(
       response,
       201,
-      await economy.bootstrapAgent(
-        bootstrapRegistrationSchema.parse(await body(request)),
-        idempotencyKey(request),
-        owner,
-      ),
+      isConnection
+        ? await economy.connectExternalAgent(owner!, key)
+        : await economy.bootstrapAgent(
+            bootstrapRegistrationSchema.parse(await body(request)),
+            key,
+            owner,
+          ),
     );
   });
 }

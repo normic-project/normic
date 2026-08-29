@@ -12,9 +12,8 @@ export default function ConnectPage() {
           <span className="kicker">REMOTE MCP · AGENT-FIRST ACCESS</span>
           <h1>One endpoint. Your agent does the rest.</h1>
           <p>
-            Create an agent through the onboarding API, store its one-time
-            credential in your secret manager, then point a Streamable HTTP MCP
-            client at Normic.
+            Sign in as the owner, select Connect Agent, then add the Streamable
+            HTTP endpoint to the compatible MCP client you already use.
           </p>
         </div>
       </header>
@@ -65,8 +64,8 @@ export default function ConnectPage() {
         />
         <Setup
           title="Generic MCP client"
-          note="Client configuration formats vary. Configure this transport and header using your client’s documented secret mechanism."
-          code={`Transport: Streamable HTTP\nEndpoint: ${url}\nAuthorization: Bearer <scoped credential or OAuth access token>\nFirst tool: normic_get_identity`}
+          note="Use normal MCP discovery after OAuth authorization. Normic publishes descriptive tool names, schemas, and capability metadata; no separate skill file is required."
+          code={`Transport: Streamable HTTP\nEndpoint: ${url}\nAuthentication: OAuth 2.1\nDiscovery: tools/list`}
         />
       </div>
       <section className="panel section-panel" id="documentation">
@@ -75,33 +74,33 @@ export default function ConnectPage() {
           <li>
             <b>1</b>
             <div>
-              <strong>Onboard once</strong>
+              <strong>Prepare the connection</strong>
               <p>
-                POST to <code>/api/v1/onboarding/register</code> with an
-                Idempotency-Key and, in production, a verified human access
-                token. The secret is displayed once and only its SHA-256 hash is
-                stored.
+                Sign in to the Owner Console and select Connect Agent. Normic
+                atomically prepares or reuses the internal identity, scoped
+                credential, and trusted OAuth grant.
               </p>
             </div>
           </li>
           <li>
             <b>2</b>
             <div>
-              <strong>Grant minimum scopes</strong>
+              <strong>Authorize from your client</strong>
               <p>
-                Service clients generally need <code>services:read</code>,{" "}
-                <code>jobs:read</code>, and only the write scopes they actually
-                use.
+                Add <code>{url}</code> to your MCP client. The owner approves
+                authorization, while Normic supplies the safe scope set from
+                trusted server-side state.
               </p>
             </div>
           </li>
           <li>
             <b>3</b>
             <div>
-              <strong>Rotate and revoke</strong>
+              <strong>Discover and operate</strong>
               <p>
-                Use the REST or SDK credential endpoints. Revoked and expired
-                credentials fail before any domain operation.
+                The client uses standard MCP discovery to obtain available tools
+                and schemas. Owners can revoke the connection immediately from
+                the Owner Console.
               </p>
             </div>
           </li>

@@ -65,7 +65,9 @@ export function HumanPurchase({
   };
   const network = async () => {
     if ((await ethereum().request({ method: "eth_chainId" })) !== "0x1237")
-      throw new Error("Switch your wallet to Robinhood Chain Mainnet (4663).");
+      throw new Error(
+        "Switch your wallet to the configured settlement network.",
+      );
     const accounts = (await ethereum().request({
       method: "eth_accounts",
     })) as string[];

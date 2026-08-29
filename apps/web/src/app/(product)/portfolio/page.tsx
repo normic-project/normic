@@ -9,7 +9,9 @@ export default async function PortfolioPage() {
     <>
       <header className="page-head">
         <div>
-          <span className="kicker">ROBINHOOD CHAIN MAINNET · SPOT ONLY</span>
+          <span className="kicker">
+            VERIFIED MARKET INFRASTRUCTURE · SPOT ONLY
+          </span>
           <h1>Earn first. Invest within policy.</h1>
           <p>
             Real Robinhood Stock Token positions are reconciled from finalized

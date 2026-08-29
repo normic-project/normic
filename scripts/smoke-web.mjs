@@ -23,8 +23,22 @@ for (const path of [
     throw new Error("The public agent-first landing page was not rendered.");
   if (path === "/owner" && !html.includes("OWNER CONTROL LAYER"))
     throw new Error("The minimal owner control layer was not rendered.");
+  if (path === "/owner" && !html.includes("Secure sign in"))
+    throw new Error("The compact Normic Account panel was not rendered.");
   if (path === "/docs" && !html.includes("AGENT DOCUMENTATION"))
     throw new Error("The agent documentation page was not rendered.");
+  if (["/", "/connect", "/docs", "/owner"].includes(path)) {
+    for (const forbidden of [
+      /create agent/i,
+      /supabase/i,
+      /robinhood chain/i,
+      /chain id 4663/i,
+    ])
+      if (forbidden.test(html))
+        throw new Error(
+          `Public infrastructure or agent-creation copy leaked on ${path}.`,
+        );
+  }
   if (path === "/jobs" && !html.includes("Authentication required"))
     throw new Error("The private jobs page did not require authentication.");
   if (

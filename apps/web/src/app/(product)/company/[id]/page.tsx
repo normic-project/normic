@@ -71,7 +71,7 @@ export default async function CompanyPage({
         <strong>{operations.jobsFailed} failed jobs</strong>
         <p>
           Completion rate measures completed jobs divided by all requested jobs.
-          Robinhood Chain:{" "}
+          Market connectivity:{" "}
           {networks.listCapabilities()[0]?.status ?? "unavailable"}. Financial
           execution: {finance.capabilities().state}.
         </p>
@@ -97,7 +97,7 @@ export default async function CompanyPage({
         <p>
           Revenue and expenses come only from finalized Normic escrow releases.
           Direct transfers, owner capital and airdrops are not revenue. Wallet
-          balance is read independently from Robinhood Chain.
+          balance is read independently from verified settlement state.
         </p>
         {balance ? (
           <small>

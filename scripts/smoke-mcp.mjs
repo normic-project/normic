@@ -45,6 +45,14 @@ try {
   if (response.isError)
     throw new Error("normic_get_identity returned an MCP error.");
   const tools = await client.listTools();
+  for (const tool of tools.tools)
+    if (
+      typeof tool.description !== "string" ||
+      tool.description.trim().length < 20 ||
+      !tool.inputSchema ||
+      tool.inputSchema.type !== "object"
+    )
+      throw new Error(`MCP discovery metadata is incomplete for ${tool.name}.`);
   for (const name of [
     "normic_request_service",
     "normic_submit_result",

@@ -210,10 +210,10 @@ export function TradingConsole({ capability }: { capability: Capability }) {
           Execute exact approved quote
         </button>
         <p className="muted-copy">
-          Execution is spot-only on chain 4663. It requires an eligible owner,
-          an active separate trading session, exact allowance, safe oracle data,
-          successful simulation, and a reviewed custody adapter. Submitted is
-          never treated as confirmed.
+          Execution is spot-only through verified market infrastructure. It
+          requires an eligible owner, an active separate trading session, exact
+          allowance, safe oracle data, successful simulation, and a reviewed
+          custody adapter. Submitted is never treated as confirmed.
         </p>
       </section>
 

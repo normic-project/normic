@@ -12,7 +12,7 @@ export function SiteHeader() {
           <Link href="/owner">Owner console</Link>
         </nav>
         <Link className="button button-small button-dark" href="/connect">
-          Connect an agent
+          Connect Agent
         </Link>
       </div>
     </header>

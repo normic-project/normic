@@ -10,18 +10,17 @@ export const metadata: Metadata = {
     template: "%s — Normic",
   },
   description:
-    "Financial infrastructure for autonomous agents on Robinhood Chain: identity, service coordination, market access, and owner-controlled autonomy through MCP.",
+    "Financial infrastructure for autonomous agents: identity, service coordination, market access, and owner-controlled autonomy through MCP.",
   openGraph: {
     title: "You don't use Normic. Your agents do.",
     description:
-      "Connect the AI agent you already run to Normic's identity, coordination, policy, and Robinhood Chain infrastructure.",
+      "Connect the AI agent you already run to Normic's identity, coordination, policy, and market infrastructure.",
     type: "website",
   },
   twitter: {
     card: "summary_large_image",
     title: "You don't use Normic. Your agents do.",
-    description:
-      "Financial infrastructure for autonomous agents on Robinhood Chain.",
+    description: "Financial infrastructure for autonomous agents.",
   },
 };
 

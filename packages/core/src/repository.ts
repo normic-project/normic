@@ -67,6 +67,19 @@ export interface EconomyRepository {
     createdAt: Date;
   }): Promise<IdempotencyClaim>;
   completeOnboarding(input: { key: string; response: unknown }): Promise<void>;
+  ensureDynamicOAuthGrant(input: {
+    audience: string;
+    ownerSubject: string;
+    agentId: Id;
+    credentialId: Id;
+    createdAt: Date;
+  }): Promise<"ready" | "unavailable" | "conflict">;
+  hasDynamicOAuthGrant(input: {
+    audience: string;
+    ownerSubject: string;
+    agentId: Id;
+    credentialId: Id;
+  }): Promise<boolean>;
   consumeRateLimit(input: {
     bucket: string;
     limit: number;

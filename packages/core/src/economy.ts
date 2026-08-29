@@ -12,6 +12,7 @@ import {
 } from "./auth.js";
 import {
   AuthorizationError,
+  CapabilityBlockedError,
   PolicyDeniedError,
   AuthenticationError,
   ConflictError,
@@ -266,6 +267,302 @@ export class NormicEconomy {
         identity: await this.snapshot(repository, company),
         ...credentialSecretResult(credential, issued.secret),
       };
+    });
+  }
+
+  async connectExternalAgent(
+    owner: VerifiedOwner,
+    idempotencyKey: string,
+  ): Promise<BootstrapRegistrationResult> {
+    idempotencyKeySchema.parse(idempotencyKey);
+    const requestHash = stableHash({
+      operation: "connect_external_agent",
+      owner,
+    });
+    return this.committedTransaction(async (repository) => {
+      const claim = await repository.claimOnboarding({
+        key: idempotencyKey,
+        requestHash,
+        createdAt: this.clock(),
+      });
+      if (claim.state === "conflict") throw new IdempotencyConflictError();
+      if (claim.state === "processing") throw new IdempotencyInProgressError();
+      if (claim.state === "replay") {
+        const replay = claim.response as {
+          companyId: string;
+          credentialId: string;
+        };
+        const [company, credential] = await Promise.all([
+          repository.getCompany(replay.companyId),
+          repository.getCredential(replay.credentialId),
+        ]);
+        if (!company || !credential)
+          throw new ConflictError(
+            "The completed connection record is unavailable.",
+          );
+        return {
+          identity: await this.snapshot(repository, company),
+          credential: publicCredential(credential),
+          secret: null,
+          secretShown: false,
+        };
+      }
+
+      const now = this.clock();
+      let user = await repository.getUserByEmail(owner.email);
+      if (
+        user &&
+        (user.authIssuer !== owner.issuer || user.authSubject !== owner.subject)
+      )
+        throw new ConflictError(
+          "This email is already registered to a different identity.",
+        );
+
+      let agent = user
+        ? (await repository.listAgents(user.id)).find(
+            (candidate) => candidate.status === "active",
+          )
+        : undefined;
+      let company = agent ? await repository.getCompany(agent.companyId) : null;
+      if (company && company.ownerUserId !== user?.id)
+        throw new ConflictError(
+          "The existing agent ownership mapping is invalid.",
+        );
+
+      if (!user || !agent || !company) {
+        const suffix = owner.subject.replaceAll("-", "");
+        const parsed = bootstrapRegistrationSchema.parse({
+          creatorEmail: owner.email,
+          creatorName: "Normic Owner",
+          agentName: "Connected MCP Agent",
+          handle: `normic_${suffix}`,
+          framework: "custom",
+          companyName: "Agent Workspace",
+          companySlug: `normic-${suffix}`,
+          description:
+            "Internal identity for an owner-authorized external MCP client.",
+          industry: "Agent operations",
+          website: null,
+          credentialLabel: "MCP OAuth connection",
+        });
+        if (await repository.getAgentByHandle(parsed.handle))
+          throw new ConflictError(
+            "The internal connection identity already exists.",
+          );
+        if (await repository.getCompanyBySlug(parsed.companySlug))
+          throw new ConflictError(
+            "The internal connection workspace already exists.",
+          );
+        const userId = user?.id ?? this.idGenerator();
+        const companyId = this.idGenerator();
+        const agentId = this.idGenerator();
+        if (!user) {
+          await repository.createUser({
+            id: userId,
+            email: owner.email,
+            name: parsed.creatorName,
+            createdAt: now,
+            authIssuer: owner.issuer,
+            authSubject: owner.subject,
+          });
+          user = await repository.getUser(userId);
+        }
+        company = companyFrom(parsed, companyId, userId, agentId, now);
+        agent = agentFrom(parsed, agentId, userId, companyId, now);
+        await this.persistIdentity(repository, company, agent, now);
+      }
+
+      const existingCredential = (
+        await repository.listCredentials(agent.id)
+      ).find(
+        (candidate) =>
+          !candidate.revokedAt &&
+          (!candidate.expiresAt || candidate.expiresAt > now) &&
+          candidate.issuer === this.credentialIssuer &&
+          candidate.audience === this.credentialAudience &&
+          candidate.scopes.length > 0 &&
+          candidate.scopes.every((scope) =>
+            DEFAULT_SCOPES.some((allowed) => allowed === scope),
+          ),
+      );
+      let credential = existingCredential
+        ? await repository.getCredential(existingCredential.id)
+        : null;
+      if (!credential) {
+        const issued = issueApiSecret(this.credentialEnvironment);
+        credential = this.credentialRecord(
+          agent.id,
+          "MCP OAuth connection",
+          [...DEFAULT_SCOPES],
+          null,
+          issued,
+          now,
+          null,
+        );
+        await repository.createCredential(credential);
+        await repository.createAuditEvent(
+          this.audit(
+            null,
+            "credential.created",
+            company.id,
+            "api_credential",
+            credential.id,
+            "create",
+            { prefix: credential.prefix, purpose: "mcp_oauth_connection" },
+            now,
+          ),
+        );
+      }
+
+      const grant = await repository.ensureDynamicOAuthGrant({
+        audience: this.credentialAudience,
+        ownerSubject: owner.subject,
+        agentId: agent.id,
+        credentialId: credential.id,
+        createdAt: now,
+      });
+      if (grant === "unavailable")
+        throw new CapabilityBlockedError("MCP", [
+          "The trusted dynamic-client policy is not configured for this audience.",
+        ]);
+      if (grant === "conflict")
+        throw new ConflictError(
+          "This owner is already connected to a different internal agent identity.",
+        );
+
+      await repository.completeOnboarding({
+        key: idempotencyKey,
+        response: { companyId: company.id, credentialId: credential.id },
+      });
+      this.emit({
+        name: "onboarding.completed",
+        actorAgentId: agent.id,
+        resourceType: "company",
+        resourceId: company.id,
+        outcome: "success",
+      });
+      return {
+        identity: await this.snapshot(repository, company),
+        credential: publicCredential(credential),
+        secret: null,
+        secretShown: false,
+      };
+    });
+  }
+
+  async getOwnerConnection(owner: VerifiedOwner) {
+    const user = await this.repository.getUserByEmail(owner.email);
+    if (
+      !user ||
+      user.authIssuer !== owner.issuer ||
+      user.authSubject !== owner.subject
+    )
+      return {
+        connected: false as const,
+        identity: null,
+        permissions: [],
+        credentials: [],
+      };
+    const agent = (await this.repository.listAgents(user.id)).find(
+      (candidate) => candidate.status === "active",
+    );
+    if (!agent)
+      return {
+        connected: false as const,
+        identity: null,
+        permissions: [],
+        credentials: [],
+      };
+    const company = await this.repository.getCompany(agent.companyId);
+    if (!company || company.ownerUserId !== user.id)
+      throw new ConflictError(
+        "The existing agent ownership mapping is invalid.",
+      );
+    const credentials = await this.repository.listCredentials(agent.id);
+    const activeCredential = credentials.find(
+      (candidate) =>
+        !candidate.revokedAt &&
+        (!candidate.expiresAt || candidate.expiresAt > this.clock()) &&
+        candidate.issuer === this.credentialIssuer &&
+        candidate.audience === this.credentialAudience,
+    );
+    const connected = activeCredential
+      ? await this.repository.hasDynamicOAuthGrant({
+          audience: this.credentialAudience,
+          ownerSubject: owner.subject,
+          agentId: agent.id,
+          credentialId: activeCredential.id,
+        })
+      : false;
+    return {
+      connected,
+      identity: {
+        agent,
+        company,
+        scopes: activeCredential?.scopes ?? [],
+        credentialId: activeCredential?.id ?? "",
+      } satisfies AgentIdentity,
+      permissions: await this.repository.listPermissions(company.id),
+      credentials,
+    };
+  }
+
+  async revokeOwnerCredential(
+    owner: VerifiedOwner,
+    credentialId: string,
+    idempotencyKey: string,
+  ): Promise<ApiCredential> {
+    idempotencyKeySchema.parse(idempotencyKey);
+    return this.committedTransaction(async (repository) => {
+      const credential = await repository.getCredential(credentialId);
+      if (!credential) throw new NotFoundError("Credential");
+      const agent = await repository.getAgent(credential.agentId);
+      const user = agent ? await repository.getUser(agent.userId) : null;
+      if (
+        !agent ||
+        !user ||
+        user.email !== owner.email ||
+        user.authIssuer !== owner.issuer ||
+        user.authSubject !== owner.subject
+      )
+        throw new AuthorizationError(
+          "This credential belongs to another owner.",
+        );
+      const requestHash = stableHash({ credentialId, owner });
+      const claim = await repository.claimIdempotency({
+        agentId: agent.id,
+        operation: "owner.credential.revoke",
+        key: idempotencyKey,
+        requestHash,
+        createdAt: this.clock(),
+      });
+      if (claim.state === "conflict") throw new IdempotencyConflictError();
+      if (claim.state === "processing") throw new IdempotencyInProgressError();
+      if (claim.state !== "replay") {
+        const now = this.clock();
+        await repository.revokeCredential(credential.id, now);
+        await repository.createAuditEvent(
+          this.audit(
+            null,
+            "credential.revoked",
+            agent.companyId,
+            "api_credential",
+            credential.id,
+            "revoke",
+            { ownerAuthorized: true },
+            now,
+          ),
+        );
+        await repository.completeIdempotency({
+          agentId: agent.id,
+          operation: "owner.credential.revoke",
+          key: idempotencyKey,
+          response: { credentialId: credential.id },
+        });
+      }
+      const updated = await repository.getCredential(credential.id);
+      if (!updated) throw new NotFoundError("Credential");
+      return publicCredential(updated);
     });
   }
 
