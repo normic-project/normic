@@ -127,6 +127,19 @@ for OAuth consent and identity data, not Normic authorization.
 
 Set explicit `MCP_ALLOWED_HOSTS` and `MCP_ALLOWED_ORIGIN_HOSTS` when remotely binding. TLS termination and trusted-proxy rules belong at the ingress. Never put credentials in query strings.
 
+### Production signup confirmation email
+
+Deploy `/auth/confirm` before updating Supabase **Authentication → Email Templates → Confirm signup**. Replace the confirmation anchor with:
+
+```html
+<a
+  href="https://normic.tech/auth/confirm?token_hash={{ .TokenHash }}&amp;type=email"
+  >Confirm email</a
+>
+```
+
+This uses [Supabase's supported TokenHash confirmation flow](https://supabase.com/docs/guides/getting-started/tutorials/with-nextjs), not `{{ .ConfirmationURL }}`. Keep email confirmation enabled. The route uses the existing `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`; no service-role key or new environment variable is required. Successful verification persists the Supabase session cookies and redirects to `https://normic.tech/#type=email`. The existing UI validates the user before displaying “Email verified” and removes that non-secret fragment. Invalid or expired links go to the existing owner resend panel; an already verified session takes precedence. No OAuth/MCP configuration changes are needed. Treat the one-time `token_hash` as sensitive: do not log confirmation query strings or enable email click tracking that rewrites this link.
+
 ## Service lifecycle
 
 ```text

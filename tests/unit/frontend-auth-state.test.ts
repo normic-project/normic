@@ -3,11 +3,34 @@ import {
   getOwnerAuthView,
   hasEmailConfirmationReturn,
   hasAuthenticatedMcpActivity,
+  hasEmailConfirmationError,
   isVerifiedSupabaseUser,
   shouldShowEmailVerifiedNotice,
 } from "../../apps/web/src/lib/frontend-auth-state.js";
 
 describe("owner frontend authentication state", () => {
+  it("recognizes confirmation failures without confusing OAuth denial or success markers", () => {
+    expect(
+      hasEmailConfirmationError(
+        new URL("https://normic.tech/?error_code=otp_expired"),
+      ),
+    ).toBe(true);
+    expect(
+      hasEmailConfirmationError(
+        new URL(
+          "https://normic.tech/#error=access_denied&error_description=Email+link+is+invalid+or+has+expired",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      hasEmailConfirmationError(
+        new URL("https://normic.tech/?error=access_denied"),
+      ),
+    ).toBe(false);
+    expect(
+      hasEmailConfirmationError(new URL("https://normic.tech/?verified=true")),
+    ).toBe(false);
+  });
   it("keeps unauthenticated and unverified users away from Connect Agent", () => {
     expect(
       getOwnerAuthView({

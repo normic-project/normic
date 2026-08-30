@@ -3,6 +3,7 @@
 import { createBrowserClient } from "@supabase/ssr";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
+import { PasswordInput } from "../../../components/password-input";
 
 type ConsentDetails = {
   clientName: string;
@@ -164,15 +165,11 @@ export function OAuthConsent({ authorizationId }: { authorizationId: string }) {
               Email
               <input name="email" type="email" autoComplete="email" required />
             </label>
-            <label>
-              Password
-              <input
-                name="password"
-                type="password"
-                autoComplete="current-password"
-                required
-              />
-            </label>
+            <PasswordInput
+              name="password"
+              autoComplete="current-password"
+              required
+            />
             <button type="submit">Sign in</button>
           </form>
         )}

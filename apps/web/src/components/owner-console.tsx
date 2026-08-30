@@ -8,16 +8,24 @@ import type {
   Permission,
 } from "@normic/core";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import {
   EMAIL_CONFIRMATION_PENDING_KEY,
+  EMAIL_CONFIRMATION_ADDRESS_KEY,
+  EMAIL_CONFIRMATION_ERROR_KEY,
+  EMAIL_RESEND_AFTER_KEY,
+  clearPendingEmailConfirmation,
+  clearEmailConfirmationErrorUrl,
+  emailResendSeconds,
   getOwnerAuthView,
+  hasEmailConfirmationError,
   hasAuthenticatedMcpActivity,
   isVerifiedSupabaseUser,
 } from "@/lib/frontend-auth-state";
 import { ownerRequestHeaders } from "@/lib/owner-request";
 import { AutonomyConsole } from "./autonomy-console";
+import { PasswordInput } from "./password-input";
 
 type OwnerConnection = {
   connected: boolean;
@@ -65,6 +73,15 @@ export function OwnerConsole({
   const [ownerToken, setOwnerToken] = useState("");
   const [emailVerified, setEmailVerified] = useState(false);
   const [verificationRequested, setVerificationRequested] = useState(false);
+  const [verificationEmail, setVerificationEmail] = useState("");
+  const [confirmationError, setConfirmationError] = useState(false);
+  const [signupPreferred, setSignupPreferred] = useState(false);
+  const [authBusy, setAuthBusy] = useState(false);
+  const [resendBusy, setResendBusy] = useState(false);
+  const [resendSeconds, setResendSeconds] = useState(0);
+  const resendInFlight = useRef(false);
+  const authInFlight = useRef(false);
+  const sessionRevision = useRef(0);
   const [connection, setConnection] =
     useState<OwnerConnection>(EMPTY_CONNECTION);
   const [message, setMessage] = useState(
@@ -93,6 +110,7 @@ export function OwnerConsole({
 
   const applySession = useCallback(
     async (session: { access_token: string } | null) => {
+      const revision = ++sessionRevision.current;
       if (!auth || !session) {
         setOwnerToken("");
         setEmailVerified(false);
@@ -102,6 +120,7 @@ export function OwnerConsole({
       }
 
       const { data, error } = await auth.auth.getUser(session.access_token);
+      if (revision !== sessionRevision.current) return;
       if (error || !data.user) {
         setOwnerToken("");
         setEmailVerified(false);
@@ -117,12 +136,15 @@ export function OwnerConsole({
       setConnection(EMPTY_CONNECTION);
       setAuthReady(true);
       if (!verified) {
+        setVerificationEmail(data.user.email ?? "");
         setMessage("Confirm your email before connecting an external agent.");
         return;
       }
 
       setVerificationRequested(false);
-      sessionStorage.removeItem(EMAIL_CONFIRMATION_PENDING_KEY);
+      setConfirmationError(false);
+      setVerificationEmail("");
+      clearPendingEmailConfirmation(sessionStorage);
       await loadConnection(session.access_token);
     },
     [auth, loadConnection],
@@ -137,6 +159,13 @@ export function OwnerConsole({
       setVerificationRequested(
         sessionStorage.getItem(EMAIL_CONFIRMATION_PENDING_KEY) === "true",
       );
+      setVerificationEmail(
+        sessionStorage.getItem(EMAIL_CONFIRMATION_ADDRESS_KEY) ?? "",
+      );
+      setConfirmationError(
+        sessionStorage.getItem(EMAIL_CONFIRMATION_ERROR_KEY) === "true" ||
+          hasEmailConfirmationError(new URL(window.location.href)),
+      );
       void applySession(data.session);
     });
     const { data } = auth.auth.onAuthStateChange((_event, session) => {
@@ -145,15 +174,46 @@ export function OwnerConsole({
     return () => data.subscription.unsubscribe();
   }, [applySession, auth]);
 
+  useEffect(() => {
+    const sync = () =>
+      setResendSeconds(
+        emailResendSeconds(sessionStorage.getItem(EMAIL_RESEND_AFTER_KEY)),
+      );
+    sync();
+    const timer = window.setInterval(sync, 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  function startResendCooldown() {
+    sessionStorage.setItem(EMAIL_RESEND_AFTER_KEY, String(Date.now() + 60_000));
+    setResendSeconds(60);
+  }
+
+  function requireVerification(email: string) {
+    sessionStorage.setItem(EMAIL_CONFIRMATION_PENDING_KEY, "true");
+    sessionStorage.setItem(EMAIL_CONFIRMATION_ADDRESS_KEY, email);
+    setVerificationEmail(email);
+    setVerificationRequested(true);
+    setConfirmationError(false);
+    startResendCooldown();
+    setMessage(
+      "If this address needs verification, check its inbox for your link.",
+    );
+  }
+
   async function authenticate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!auth) return setMessage("Normic Authentication is unavailable.");
+    if (authInFlight.current) return;
     const form = new FormData(event.currentTarget);
     const submitter = (event.nativeEvent as SubmitEvent).submitter;
-    const action =
-      submitter instanceof HTMLButtonElement && submitter.value === "signup"
-        ? "signup"
-        : "signin";
+    const action = (
+      submitter instanceof HTMLButtonElement
+        ? submitter.value === "signup"
+        : signupPreferred
+    )
+      ? "signup"
+      : "signin";
     const email = String(form.get("email") ?? "")
       .trim()
       .toLowerCase();
@@ -163,26 +223,130 @@ export function OwnerConsole({
         ? "Signing in securely…"
         : "Creating your Normic Account…",
     );
-    const result =
-      action === "signup"
-        ? await auth.auth.signUp({
-            email,
-            password,
-            options: { emailRedirectTo: window.location.origin },
-          })
-        : await auth.auth.signInWithPassword({ email, password });
-    if (result.error) return setMessage(result.error.message);
-    if (action === "signup") {
-      sessionStorage.setItem(EMAIL_CONFIRMATION_PENDING_KEY, "true");
-      setVerificationRequested(true);
-    }
-    if (!result.data.session) {
-      setAuthReady(true);
-      return setMessage(
-        "Check your email, confirm the account, then return to normic.tech.",
+    authInFlight.current = true;
+    setAuthBusy(true);
+    try {
+      const result =
+        action === "signup"
+          ? await auth.auth.signUp({
+              email,
+              password,
+              options: { emailRedirectTo: window.location.origin },
+            })
+          : await auth.auth.signInWithPassword({ email, password });
+      if (result.error) {
+        if (
+          result.error.code === "email_not_confirmed" ||
+          (action === "signup" &&
+            ["user_already_exists", "email_exists"].includes(
+              result.error.code ?? "",
+            ))
+        ) {
+          requireVerification(email);
+          return;
+        }
+        setMessage(
+          result.error.status === 429
+            ? "Too many attempts. Please wait before trying again."
+            : "Authentication could not be completed. Check your details and try again.",
+        );
+        return;
+      }
+      if (action === "signup") requireVerification(email);
+      if (!result.data.session) {
+        setAuthReady(true);
+        return setMessage(
+          "Check your email, confirm the account, then return to normic.tech.",
+        );
+      }
+      await applySession(result.data.session);
+    } catch {
+      setMessage(
+        "Authentication is temporarily unavailable. Please try again.",
       );
+    } finally {
+      authInFlight.current = false;
+      setAuthBusy(false);
     }
-    await applySession(result.data.session);
+  }
+
+  async function resendVerification(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (
+      !auth ||
+      resendInFlight.current ||
+      emailResendSeconds(sessionStorage.getItem(EMAIL_RESEND_AFTER_KEY)) > 0
+    )
+      return;
+    const email = verificationEmail.trim().toLowerCase();
+    if (!email) return;
+    resendInFlight.current = true;
+    setResendBusy(true);
+    startResendCooldown();
+    setMessage("Requesting a new verification link…");
+    try {
+      const { error } = await auth.auth.resend({
+        type: "signup",
+        email,
+        options: { emailRedirectTo: "https://normic.tech" },
+      });
+      startResendCooldown();
+      if (
+        error?.status === 429 ||
+        ["over_email_send_rate_limit", "over_request_rate_limit"].includes(
+          error?.code ?? "",
+        )
+      ) {
+        setMessage(
+          "Please wait before requesting another link. Email delivery is rate-limited.",
+        );
+      } else if (error && (!error.status || error.status >= 500)) {
+        setMessage(
+          "We couldn't request a link right now. Please try again later.",
+        );
+      } else {
+        // Use the same response for unknown, already verified, and pending addresses.
+        setMessage(
+          "If this address needs verification, a new link will arrive shortly.",
+        );
+      }
+    } catch {
+      setMessage(
+        "We couldn't request a link right now. Please try again later.",
+      );
+    } finally {
+      resendInFlight.current = false;
+      setResendBusy(false);
+    }
+  }
+
+  async function resetVerification(signup: boolean) {
+    if (resendInFlight.current || authInFlight.current) return;
+    // Only an unverified session can reach these controls.
+    if (ownerToken) {
+      if (!auth) return;
+      try {
+        const { error } = await auth.auth.signOut({ scope: "local" });
+        if (error) throw error;
+      } catch {
+        return setMessage("Unable to clear this session. Please try again.");
+      }
+    }
+    ++sessionRevision.current;
+    clearPendingEmailConfirmation(sessionStorage);
+    clearEmailConfirmationErrorUrl();
+    setOwnerToken("");
+    setEmailVerified(false);
+    setConnection(EMPTY_CONNECTION);
+    setVerificationEmail("");
+    setVerificationRequested(false);
+    setConfirmationError(false);
+    setSignupPreferred(signup);
+    setMessage(
+      signup
+        ? "Create your account with another email address."
+        : "Sign in with a verified Normic Account.",
+    );
   }
 
   async function connectAgent() {
@@ -254,7 +418,9 @@ export function OwnerConsole({
     setConnection(EMPTY_CONNECTION);
     setAuthReady(true);
     setMessage("Sign in with a verified Normic Account.");
-    sessionStorage.removeItem(EMAIL_CONFIRMATION_PENDING_KEY);
+    setConfirmationError(false);
+    setVerificationEmail("");
+    clearPendingEmailConfirmation(sessionStorage);
     await auth?.auth.signOut();
   }
 
@@ -269,6 +435,7 @@ export function OwnerConsole({
         emailVerified,
         connected: connection.connected,
         verificationRequested,
+        confirmationError,
       })
     : "loading";
 
@@ -298,7 +465,9 @@ export function OwnerConsole({
             <>
               <div className="owner-auth-copy">
                 <span className="owner-section-index">01 / NORMIC ACCOUNT</span>
-                <h2>Secure sign in.</h2>
+                <h2>
+                  {signupPreferred ? "Create your account." : "Secure sign in."}
+                </h2>
                 <p>
                   Human authentication stays separate from MCP credentials and
                   agent permissions.
@@ -317,18 +486,21 @@ export function OwnerConsole({
                     required
                   />
                 </label>
-                <label>
-                  Password
-                  <input
-                    name="password"
-                    type="password"
-                    autoComplete="current-password"
-                    minLength={8}
-                    required
-                  />
-                </label>
+                <PasswordInput
+                  name="password"
+                  autoComplete={
+                    signupPreferred ? "new-password" : "current-password"
+                  }
+                  minLength={8}
+                  required
+                />
                 <div className="owner-actions">
-                  <button type="submit" name="action" value="signin">
+                  <button
+                    type="submit"
+                    name="action"
+                    value="signin"
+                    disabled={authBusy}
+                  >
                     Sign In
                   </button>
                   <button
@@ -336,6 +508,7 @@ export function OwnerConsole({
                     name="action"
                     value="signup"
                     className="owner-button-quiet"
+                    disabled={authBusy}
                   >
                     Create Account
                   </button>
@@ -344,22 +517,82 @@ export function OwnerConsole({
             </>
           ) : null}
 
-          {view === "verification-required" ? (
+          {view === "verification-required" || view === "expired-link" ? (
             <>
               <div className="owner-auth-copy">
-                <span className="owner-section-index">01 / VERIFY EMAIL</span>
-                <h2>Confirm your email.</h2>
-                <p>
-                  Use the confirmation link sent to your inbox, then return to
-                  normic.tech.
-                </p>
+                <span className="owner-section-index">
+                  {view === "expired-link"
+                    ? "EMAIL LINK EXPIRED"
+                    : "CHECK YOUR EMAIL"}
+                </span>
+                <h2>
+                  {view === "expired-link"
+                    ? "Email link expired."
+                    : "Check your email."}
+                </h2>
+                {view === "expired-link" ? (
+                  <p>This verification link is no longer valid.</p>
+                ) : (
+                  <>
+                    <p>We sent a verification link to:</p>
+                    <p className="owner-verification-email">
+                      {verificationEmail || "your email address"}
+                    </p>
+                  </>
+                )}
               </div>
-              <div className="owner-verification-state">
-                <span>VERIFICATION REQUIRED</span>
-                <p>
-                  Connect Agent remains unavailable until email confirmation.
+              <form
+                className="owner-form owner-auth-form owner-verification-form"
+                onSubmit={(event) => void resendVerification(event)}
+              >
+                {view === "expired-link" || !verificationEmail ? (
+                  <label>
+                    Email
+                    <input
+                      name="email"
+                      type="email"
+                      autoComplete="email"
+                      required
+                      value={verificationEmail}
+                      onChange={(event) =>
+                        setVerificationEmail(event.target.value)
+                      }
+                      disabled={resendBusy}
+                    />
+                  </label>
+                ) : null}
+                <button
+                  type="submit"
+                  disabled={!auth || resendBusy || resendSeconds > 0}
+                >
+                  {resendBusy
+                    ? "Requesting link…"
+                    : view === "expired-link"
+                      ? "Send new verification link"
+                      : "Resend verification email"}
+                </button>
+                <p
+                  className="owner-resend-countdown"
+                  role="timer"
+                  aria-live="off"
+                >
+                  {resendSeconds > 0
+                    ? `Resend available in ${resendSeconds}s`
+                    : "You can request a new verification link."}
                 </p>
-              </div>
+                <button
+                  type="button"
+                  className="owner-button-quiet"
+                  disabled={resendBusy}
+                  onClick={() =>
+                    void resetVerification(view !== "expired-link")
+                  }
+                >
+                  {view === "expired-link"
+                    ? "Back to sign in"
+                    : "Use another email"}
+                </button>
+              </form>
             </>
           ) : null}
 

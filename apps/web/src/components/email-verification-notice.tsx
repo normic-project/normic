@@ -5,7 +5,10 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import {
   EMAIL_CONFIRMATION_PENDING_KEY,
+  EMAIL_CONFIRMATION_ERROR_KEY,
   EMAIL_VERIFIED_NOTICE_KEY,
+  clearEmailConfirmationErrorUrl,
+  hasEmailConfirmationError,
   hasEmailConfirmationReturn,
   isVerifiedSupabaseUser,
   shouldShowEmailVerifiedNotice,
@@ -32,6 +35,10 @@ export function EmailVerificationNotice() {
     );
     const previouslyValidatedNotice =
       sessionStorage.getItem(EMAIL_VERIFIED_NOTICE_KEY) === "true";
+    const confirmationError = hasEmailConfirmationError(
+      new URL(window.location.href),
+    );
+    let errorHandled = false;
 
     async function verifyCurrentSession() {
       const { data: sessionData } = await client.auth.getSession();
@@ -42,6 +49,18 @@ export function EmailVerificationNotice() {
         trustedVerifiedUser = !error && isVerifiedSupabaseUser(data.user);
       }
       if (!active) return;
+      if (confirmationError && !errorHandled) {
+        errorHandled = true;
+        clearEmailConfirmationErrorUrl();
+        if (trustedVerifiedUser) {
+          sessionStorage.removeItem(EMAIL_CONFIRMATION_ERROR_KEY);
+        } else {
+          sessionStorage.setItem(EMAIL_CONFIRMATION_ERROR_KEY, "true");
+          sessionStorage.removeItem(EMAIL_VERIFIED_NOTICE_KEY);
+          if (window.location.pathname !== "/owner") router.replace("/owner");
+        }
+        return;
+      }
       const shouldShow = shouldShowEmailVerifiedNotice({
         confirmationReturn,
         trustedVerifiedUser,
@@ -64,7 +83,7 @@ export function EmailVerificationNotice() {
       active = false;
       data.subscription.unsubscribe();
     };
-  }, [auth]);
+  }, [auth, router]);
 
   if (!open) return null;
 
