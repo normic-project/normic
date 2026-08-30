@@ -122,8 +122,6 @@ export class OAuthAgentAuthenticator {
     try {
       const payload = await this.verifier.verify(token);
       const subject = z.uuid().parse(payload.sub);
-      if (z.uuid().parse(payload.user_id) !== subject)
-        throw new AuthenticationError();
       if (
         payload.role !== "authenticated" ||
         payload.is_anonymous === true ||
@@ -150,6 +148,15 @@ export class OAuthAgentAuthenticator {
         !owner ||
         owner.authIssuer !== this.config.issuer ||
         owner.authSubject !== subject
+      )
+        throw new AuthenticationError();
+      if (
+        !(await this.repository.hasDynamicOAuthGrant({
+          audience: this.config.audience,
+          ownerSubject: subject,
+          agentId,
+          credentialId,
+        }))
       )
         throw new AuthenticationError();
       const grants = Array.isArray(payload.normic_scopes)

@@ -412,11 +412,31 @@ describe("Phase 3 authorization, agreements, and operational truth", () => {
       "UPDATE users SET auth_issuer=$2, auth_subject=$3 WHERE id=$1",
       [provider.userId, TEST_ISSUER, subject],
     );
+    const policyId = crypto.randomUUID();
+    await runtime.database.query(
+      `INSERT INTO normic_oauth_clients
+       (client_id,audience,enabled,allow_dynamic_clients)
+       VALUES($1,$2,true,true)`,
+      [policyId, TEST_AUDIENCE],
+    );
+    await runtime.database.query(
+      `INSERT INTO normic_oauth_agent_grants
+       (oauth_client_id,supabase_user_id,agent_id,credential_id)
+       VALUES($1,$2,$3,$4)`,
+      [policyId, subject, provider.agentId, credential.id],
+    );
+    expect(
+      await runtime.repository.hasDynamicOAuthGrant({
+        audience: TEST_AUDIENCE,
+        ownerSubject: subject,
+        agentId: provider.agentId,
+        credentialId: credential.id,
+      }),
+    ).toBe(true);
     const claims = {
       iss: TEST_ISSUER,
       aud: TEST_AUDIENCE,
       sub: subject,
-      user_id: subject,
       role: "authenticated",
       is_anonymous: false,
       client_id: crypto.randomUUID(),
