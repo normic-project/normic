@@ -1268,6 +1268,15 @@ select {
   display: grid;
   gap: 16px;
 }
+.oauth-authorization-prompt {
+  gap: 18px;
+}
+.oauth-request {
+  max-width: 480px;
+  margin: 0;
+  font-size: 17px;
+  line-height: 1.55;
+}
 .oauth-form label {
   display: grid;
   gap: 7px;
@@ -1292,7 +1301,7 @@ select {
 .oauth-details {
   display: grid;
   gap: 12px;
-  margin: 0;
+  margin: 14px 0 0;
 }
 .oauth-details div {
   padding: 12px;
@@ -1314,11 +1323,49 @@ select {
   color: #002b00;
 }
 .oauth-note {
-  color: #0a0d18;
-  font-size: 13px;
+  margin: -4px 0 0;
+  color: rgba(10, 13, 24, 0.62);
+  font-size: 12px;
+  line-height: 1.5;
 }
 .oauth-card .button-row button {
   border-radius: 999px;
+}
+.oauth-actions {
+  margin-top: 2px;
+}
+.oauth-technical-details {
+  padding-top: 16px;
+  border-top: 1px solid rgba(10, 13, 24, 0.18);
+}
+.oauth-technical-details summary {
+  width: fit-content;
+  color: rgba(10, 13, 24, 0.68);
+  font-size: 12px;
+  cursor: pointer;
+}
+.oauth-technical-details summary:hover,
+.oauth-technical-details summary:focus-visible {
+  color: #002b00;
+}
+@media (max-width: 520px) {
+  .oauth-shell {
+    padding: 14px;
+  }
+  .oauth-card {
+    padding: 24px 20px;
+    border-radius: 22px;
+  }
+  .oauth-card h1 {
+    margin-bottom: 20px;
+    font-size: clamp(40px, 14vw, 54px);
+  }
+  .oauth-actions {
+    align-items: stretch;
+  }
+  .oauth-actions button {
+    flex: 1 1 140px;
+  }
 }
 
 /* Public editorial experience */

@@ -1,13 +1,57 @@
 "use client";
 
 import { createBrowserClient } from "@supabase/ssr";
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import type { FormEvent } from "react";
 
 type ConsentDetails = {
   clientName: string;
   redirectUri: string;
   scopes: string[];
 };
+
+export function OAuthAuthorizationPrompt({
+  details,
+  onDecision,
+}: {
+  details: ConsentDetails;
+  onDecision: (decision: "approve" | "deny") => void;
+}) {
+  return (
+    <div className="oauth-form oauth-authorization-prompt">
+      <p className="oauth-request">
+        <strong>{details.clientName}</strong> is requesting access to your
+        Normic identity.
+      </p>
+      <div className="button-row oauth-actions">
+        <button type="button" onClick={() => onDecision("approve")}>
+          Authorize
+        </button>
+        <button
+          className="secondary"
+          type="button"
+          onClick={() => onDecision("deny")}
+        >
+          Deny
+        </button>
+      </div>
+      <p className="oauth-note">Normic permissions stay owner-controlled.</p>
+      <details className="oauth-technical-details">
+        <summary>View technical details</summary>
+        <dl className="oauth-details">
+          <div>
+            <dt>Redirect URI</dt>
+            <dd>{details.redirectUri}</dd>
+          </div>
+          <div>
+            <dt>Requested identity scopes</dt>
+            <dd>{details.scopes.join(", ") || "None"}</dd>
+          </div>
+        </dl>
+      </details>
+    </div>
+  );
+}
 
 export function OAuthConsent({ authorizationId }: { authorizationId: string }) {
   const supabase = useMemo(() => {
@@ -133,39 +177,10 @@ export function OAuthConsent({ authorizationId }: { authorizationId: string }) {
           </form>
         )}
         {!busy && details && (
-          <div className="oauth-form">
-            <p>
-              <strong>{details.clientName}</strong> is requesting access to your
-              Normic identity.
-            </p>
-            <dl className="oauth-details">
-              <div>
-                <dt>Redirect URI</dt>
-                <dd>{details.redirectUri}</dd>
-              </div>
-              <div>
-                <dt>Identity scopes</dt>
-                <dd>{details.scopes.join(", ") || "None"}</dd>
-              </div>
-            </dl>
-            <p className="oauth-note">
-              Normic agent permissions are assigned separately from trusted
-              server-side grants. This client cannot grant itself additional
-              scopes.
-            </p>
-            <div className="button-row">
-              <button type="button" onClick={() => void decide("approve")}>
-                Authorize
-              </button>
-              <button
-                className="secondary"
-                type="button"
-                onClick={() => void decide("deny")}
-              >
-                Deny
-              </button>
-            </div>
-          </div>
+          <OAuthAuthorizationPrompt
+            details={details}
+            onDecision={(decision) => void decide(decision)}
+          />
         )}
       </section>
     </main>
