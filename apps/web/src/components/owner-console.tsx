@@ -13,6 +13,7 @@ import type { FormEvent } from "react";
 import {
   EMAIL_CONFIRMATION_PENDING_KEY,
   getOwnerAuthView,
+  hasAuthenticatedMcpActivity,
   isVerifiedSupabaseUser,
 } from "@/lib/frontend-auth-state";
 import { ownerRequestHeaders } from "@/lib/owner-request";
@@ -258,6 +259,10 @@ export function OwnerConsole({
   }
 
   const { identity, permissions, credentials } = connection;
+  const mcpAuthenticated = hasAuthenticatedMcpActivity(
+    credentials,
+    identity?.credentialId,
+  );
   const view = authReady
     ? getOwnerAuthView({
         authenticated: Boolean(ownerToken),
@@ -366,7 +371,9 @@ export function OwnerConsole({
                 </span>
                 <h2>
                   {view === "connected"
-                    ? "Agent connected."
+                    ? mcpAuthenticated
+                      ? "Agent connected."
+                      : "Connection ready."
                     : "Connect your agent."}
                 </h2>
                 <p>
@@ -377,7 +384,9 @@ export function OwnerConsole({
               </div>
               <div className="owner-connection-action">
                 {view === "connected" ? (
-                  <span className="connection-state ready">CONNECTED</span>
+                  <span className="connection-state ready">
+                    {mcpAuthenticated ? "CONNECTED" : "CONNECTION READY"}
+                  </span>
                 ) : (
                   <small>MCP ENDPOINT</small>
                 )}
@@ -407,7 +416,11 @@ export function OwnerConsole({
           <section className="owner-section">
             <div className="owner-section-head">
               <span>03 / IDENTITY + SECURITY</span>
-              <h2>Connected agent.</h2>
+              <h2>
+                {mcpAuthenticated
+                  ? "Connected agent."
+                  : "Prepared agent identity."}
+              </h2>
               <p>
                 {identity.company.name} · owner-authorized internal identity for
                 an external MCP client.
@@ -417,7 +430,11 @@ export function OwnerConsole({
               <div>
                 <small>CONNECTION</small>
                 <p>
-                  {connection.connected ? "Ready" : "Revoked or incomplete"}
+                  {connection.connected
+                    ? mcpAuthenticated
+                      ? "Connected"
+                      : "Connection ready"
+                    : "Revoked or incomplete"}
                 </p>
               </div>
               <div>

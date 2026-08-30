@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   getOwnerAuthView,
   hasEmailConfirmationReturn,
+  hasAuthenticatedMcpActivity,
   isVerifiedSupabaseUser,
   shouldShowEmailVerifiedNotice,
 } from "../../apps/web/src/lib/frontend-auth-state.js";
@@ -81,5 +82,27 @@ describe("owner frontend authentication state", () => {
         previouslyValidatedNotice: false,
       }),
     ).toBe(true);
+  });
+
+  it("shows connected only after the granted credential records authentication activity", () => {
+    const credentialId = crypto.randomUUID();
+    expect(
+      hasAuthenticatedMcpActivity(
+        [{ id: credentialId, lastUsedAt: null }],
+        credentialId,
+      ),
+    ).toBe(false);
+    expect(
+      hasAuthenticatedMcpActivity(
+        [{ id: credentialId, lastUsedAt: new Date().toISOString() }],
+        credentialId,
+      ),
+    ).toBe(true);
+    expect(
+      hasAuthenticatedMcpActivity(
+        [{ id: crypto.randomUUID(), lastUsedAt: new Date() }],
+        credentialId,
+      ),
+    ).toBe(false);
   });
 });

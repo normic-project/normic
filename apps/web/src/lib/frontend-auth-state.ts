@@ -51,3 +51,17 @@ export function shouldShowEmailVerifiedNotice(input: {
     (input.confirmationReturn && input.trustedVerifiedUser)
   );
 }
+
+export function hasAuthenticatedMcpActivity(
+  credentials: readonly {
+    id: string;
+    lastUsedAt: Date | string | null;
+  }[],
+  credentialId: string | undefined,
+): boolean {
+  return Boolean(
+    credentialId &&
+    credentials.find((credential) => credential.id === credentialId)
+      ?.lastUsedAt,
+  );
+}
