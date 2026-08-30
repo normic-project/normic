@@ -59,9 +59,14 @@ describe("Supabase Custom Access Token Hook", () => {
         iss: TEST_ISSUER,
         aud: "authenticated",
         sub: subject,
-        user_id: subject,
         client_id: clientId,
+        scope: "openid email",
+        email: owner!.email,
+        phone: "",
         role: "authenticated",
+        aal: "aal1",
+        session_id: crypto.randomUUID(),
+        is_anonymous: false,
         exp: 2_000_000_000,
         iat: 1_900_000_000,
         user_metadata: {
@@ -91,9 +96,14 @@ describe("Supabase Custom Access Token Hook", () => {
       iss: TEST_ISSUER,
       aud: TEST_AUDIENCE,
       sub: subject,
-      user_id: subject,
       client_id: clientId,
+      scope: "openid email",
+      email: expect.any(String),
+      phone: "",
       role: "authenticated",
+      aal: "aal1",
+      session_id: expect.any(String),
+      is_anonymous: false,
       exp: 2_000_000_000,
       iat: 1_900_000_000,
       normic_agent_id: identity.agentId,
@@ -121,12 +131,13 @@ describe("Supabase Custom Access Token Hook", () => {
       },
     };
     expect(await invoke(login)).toEqual(login);
+    const unrelatedClientId = crypto.randomUUID();
     const unrelated = {
       ...event,
-      client_id: crypto.randomUUID(),
+      client_id: unrelatedClientId,
       claims: {
         ...(event.claims as Record<string, unknown>),
-        client_id: crypto.randomUUID(),
+        client_id: unrelatedClientId,
       },
     };
     expect(await invoke(unrelated)).toEqual(unrelated);
@@ -191,5 +202,21 @@ describe("Supabase Custom Access Token Hook", () => {
       [subject],
     );
     await expect(invoke()).rejects.toThrow(/grant is unavailable/);
+  });
+
+  it("fails closed for mismatched trusted subjects and clients", async () => {
+    await expect(
+      invoke({
+        ...event,
+        user_id: crypto.randomUUID(),
+      }),
+    ).rejects.toThrow(/subject binding is invalid/);
+
+    await expect(
+      invoke({
+        ...event,
+        client_id: crypto.randomUUID(),
+      }),
+    ).rejects.toThrow(/client binding is invalid/);
   });
 });

@@ -31,6 +31,7 @@ export async function createTestRuntime(eventSink?: (value: unknown) => void) {
     "0008_phase6_autonomous_operations.sql",
     "0009_supabase_oauth_hook.sql",
     "0010_dynamic_mcp_oauth_clients.sql",
+    "0011_fix_oauth_hook_subject_binding.sql",
   ])
     await database.exec(
       await readFile(
