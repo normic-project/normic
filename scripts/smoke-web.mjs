@@ -23,8 +23,8 @@ for (const path of [
     throw new Error("The public agent-first landing page was not rendered.");
   if (path === "/owner" && !html.includes("OWNER CONTROL LAYER"))
     throw new Error("The minimal owner control layer was not rendered.");
-  if (path === "/owner" && !html.includes("Secure sign in"))
-    throw new Error("The compact Normic Account panel was not rendered.");
+  if (path === "/owner" && !html.includes("Checking secure session"))
+    throw new Error("The session-safe Normic Account panel was not rendered.");
   if (path === "/docs" && !html.includes("AGENT DOCUMENTATION"))
     throw new Error("The agent documentation page was not rendered.");
   if (["/", "/connect", "/docs", "/owner"].includes(path)) {

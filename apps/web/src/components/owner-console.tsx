@@ -10,6 +10,12 @@ import type {
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
+import {
+  EMAIL_CONFIRMATION_PENDING_KEY,
+  getOwnerAuthView,
+  isVerifiedSupabaseUser,
+} from "@/lib/frontend-auth-state";
+import { ownerRequestHeaders } from "@/lib/owner-request";
 import { AutonomyConsole } from "./autonomy-console";
 
 type OwnerConnection = {
@@ -33,11 +39,7 @@ async function ownerRequest<T>(
 ): Promise<T> {
   const response = await fetch(`/api/v1${path}`, {
     ...init,
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${token}`,
-      ...(init.headers as Record<string, string> | undefined),
-    },
+    headers: ownerRequestHeaders(token, init.headers),
   });
   const value = (await response.json()) as T & {
     error?: { message?: string };
@@ -58,7 +60,10 @@ export function OwnerConsole({
     const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
     return url && key ? createBrowserClient(url, key) : null;
   }, []);
+  const [authReady, setAuthReady] = useState(false);
   const [ownerToken, setOwnerToken] = useState("");
+  const [emailVerified, setEmailVerified] = useState(false);
+  const [verificationRequested, setVerificationRequested] = useState(false);
   const [connection, setConnection] =
     useState<OwnerConnection>(EMPTY_CONNECTION);
   const [message, setMessage] = useState(
@@ -85,20 +90,59 @@ export function OwnerConsole({
     }
   }, []);
 
+  const applySession = useCallback(
+    async (session: { access_token: string } | null) => {
+      if (!auth || !session) {
+        setOwnerToken("");
+        setEmailVerified(false);
+        setConnection(EMPTY_CONNECTION);
+        setAuthReady(true);
+        return;
+      }
+
+      const { data, error } = await auth.auth.getUser(session.access_token);
+      if (error || !data.user) {
+        setOwnerToken("");
+        setEmailVerified(false);
+        setConnection(EMPTY_CONNECTION);
+        setMessage("Your secure session could not be verified. Sign in again.");
+        setAuthReady(true);
+        return;
+      }
+
+      const verified = isVerifiedSupabaseUser(data.user);
+      setOwnerToken(session.access_token);
+      setEmailVerified(verified);
+      setConnection(EMPTY_CONNECTION);
+      setAuthReady(true);
+      if (!verified) {
+        setMessage("Confirm your email before connecting an external agent.");
+        return;
+      }
+
+      setVerificationRequested(false);
+      sessionStorage.removeItem(EMAIL_CONFIRMATION_PENDING_KEY);
+      await loadConnection(session.access_token);
+    },
+    [auth, loadConnection],
+  );
+
   useEffect(() => {
-    if (!auth) return;
+    if (!auth) {
+      queueMicrotask(() => setAuthReady(true));
+      return;
+    }
     void auth.auth.getSession().then(({ data }) => {
-      const token = data.session?.access_token ?? "";
-      setOwnerToken(token);
-      if (token) void loadConnection(token);
+      setVerificationRequested(
+        sessionStorage.getItem(EMAIL_CONFIRMATION_PENDING_KEY) === "true",
+      );
+      void applySession(data.session);
     });
     const { data } = auth.auth.onAuthStateChange((_event, session) => {
-      const token = session?.access_token ?? "";
-      setOwnerToken(token);
-      if (!token) setConnection(EMPTY_CONNECTION);
+      window.setTimeout(() => void applySession(session), 0);
     });
     return () => data.subscription.unsubscribe();
-  }, [auth, loadConnection]);
+  }, [applySession, auth]);
 
   async function authenticate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -123,16 +167,21 @@ export function OwnerConsole({
         ? await auth.auth.signUp({
             email,
             password,
-            options: { emailRedirectTo: `${window.location.origin}/owner` },
+            options: { emailRedirectTo: window.location.origin },
           })
         : await auth.auth.signInWithPassword({ email, password });
     if (result.error) return setMessage(result.error.message);
-    if (!result.data.session)
+    if (action === "signup") {
+      sessionStorage.setItem(EMAIL_CONFIRMATION_PENDING_KEY, "true");
+      setVerificationRequested(true);
+    }
+    if (!result.data.session) {
+      setAuthReady(true);
       return setMessage(
-        "Check your email, verify the account, then return here to sign in.",
+        "Check your email, confirm the account, then return to normic.tech.",
       );
-    setOwnerToken(result.data.session.access_token);
-    await loadConnection(result.data.session.access_token);
+    }
+    await applySession(result.data.session);
   }
 
   async function connectAgent() {
@@ -198,108 +247,160 @@ export function OwnerConsole({
   }
 
   async function signOut() {
-    await auth?.auth.signOut();
     setOwnerToken("");
+    setEmailVerified(false);
+    setVerificationRequested(false);
     setConnection(EMPTY_CONNECTION);
-    setMessage("Owner session ended.");
+    setAuthReady(true);
+    setMessage("Sign in with a verified Normic Account.");
+    sessionStorage.removeItem(EMAIL_CONFIRMATION_PENDING_KEY);
+    await auth?.auth.signOut();
   }
 
   const { identity, permissions, credentials } = connection;
+  const view = authReady
+    ? getOwnerAuthView({
+        authenticated: Boolean(ownerToken),
+        emailVerified,
+        connected: connection.connected,
+        verificationRequested,
+      })
+    : "loading";
 
   return (
     <div className="owner-console">
-      <section className="owner-auth-panel">
-        <div className="owner-auth-copy">
-          <span className="owner-section-index">01 / NORMIC ACCOUNT</span>
-          <h2>Secure sign in.</h2>
-          <p>
-            Human authentication stays separate from MCP credentials and agent
-            permissions.
-          </p>
-        </div>
-        <form
-          className="owner-form owner-auth-form"
-          onSubmit={(event) => void authenticate(event)}
-        >
-          <label>
-            Email
-            <input name="email" type="email" autoComplete="email" required />
-          </label>
-          <label>
-            Password
-            <input
-              name="password"
-              type="password"
-              autoComplete="current-password"
-              minLength={8}
-              required
-            />
-          </label>
-          <div className="owner-actions">
-            <button type="submit" name="action" value="signin">
-              Sign In
-            </button>
-            <button
-              type="submit"
-              name="action"
-              value="signup"
-              className="owner-button-quiet"
-            >
-              Create Account
-            </button>
-            {ownerToken ? (
-              <button
-                type="button"
-                className="owner-button-quiet"
-                onClick={() => void signOut()}
-              >
-                Sign Out
-              </button>
-            ) : null}
-          </div>
-        </form>
-      </section>
+      <section className={`owner-auth-panel owner-auth-panel-${view}`}>
+        {ownerToken ? (
+          <button
+            type="button"
+            className="owner-account-control"
+            onClick={() => void signOut()}
+          >
+            Sign Out
+          </button>
+        ) : null}
 
-      {ownerToken ? (
-        <section className="owner-section owner-connect-agent">
-          <div className="owner-section-head">
-            <span>02 / CONNECTED AGENTS</span>
-            <h2>
-              {connection.connected
-                ? "Connection ready."
-                : "Connect your agent."}
-            </h2>
-            <p>
-              Normic prepares one trusted internal identity and a safe,
-              non-financial scope set. Your external agent remains in your own
-              MCP client.
-            </p>
-          </div>
-          <div className="owner-connection-action">
-            <span
-              className={
-                connection.connected
-                  ? "connection-state ready"
-                  : "connection-state"
-              }
-            >
-              {connection.connected ? "CONNECTED" : "NOT CONNECTED"}
-            </span>
-            <code>https://normic.tech/mcp</code>
-            <button type="button" onClick={() => void connectAgent()}>
-              Connect Agent
-            </button>
-            <Link href="/connect">Open client instructions →</Link>
-          </div>
-          <p className="owner-message" role="status">
-            {message}
-          </p>
-        </section>
-      ) : (
-        <p className="owner-message owner-message-standalone" role="status">
+        <div className="owner-primary-state" key={view} aria-live="polite">
+          {view === "loading" ? (
+            <div className="owner-auth-copy owner-loading-state">
+              <span className="owner-section-index">01 / NORMIC ACCOUNT</span>
+              <h2>Checking secure session.</h2>
+              <p>Restoring your verified Normic Account.</p>
+            </div>
+          ) : null}
+
+          {view === "unauthenticated" ? (
+            <>
+              <div className="owner-auth-copy">
+                <span className="owner-section-index">01 / NORMIC ACCOUNT</span>
+                <h2>Secure sign in.</h2>
+                <p>
+                  Human authentication stays separate from MCP credentials and
+                  agent permissions.
+                </p>
+              </div>
+              <form
+                className="owner-form owner-auth-form"
+                onSubmit={(event) => void authenticate(event)}
+              >
+                <label>
+                  Email
+                  <input
+                    name="email"
+                    type="email"
+                    autoComplete="email"
+                    required
+                  />
+                </label>
+                <label>
+                  Password
+                  <input
+                    name="password"
+                    type="password"
+                    autoComplete="current-password"
+                    minLength={8}
+                    required
+                  />
+                </label>
+                <div className="owner-actions">
+                  <button type="submit" name="action" value="signin">
+                    Sign In
+                  </button>
+                  <button
+                    type="submit"
+                    name="action"
+                    value="signup"
+                    className="owner-button-quiet"
+                  >
+                    Create Account
+                  </button>
+                </div>
+              </form>
+            </>
+          ) : null}
+
+          {view === "verification-required" ? (
+            <>
+              <div className="owner-auth-copy">
+                <span className="owner-section-index">01 / VERIFY EMAIL</span>
+                <h2>Confirm your email.</h2>
+                <p>
+                  Use the confirmation link sent to your inbox, then return to
+                  normic.tech.
+                </p>
+              </div>
+              <div className="owner-verification-state">
+                <span>VERIFICATION REQUIRED</span>
+                <p>
+                  Connect Agent remains unavailable until email confirmation.
+                </p>
+              </div>
+            </>
+          ) : null}
+
+          {view === "connect" || view === "connected" ? (
+            <>
+              <div className="owner-auth-copy">
+                <span className="owner-section-index">
+                  02 / CONNECT YOUR AGENT
+                </span>
+                <h2>
+                  {view === "connected"
+                    ? "Agent connected."
+                    : "Connect your agent."}
+                </h2>
+                <p>
+                  Your external agent stays in your own client. Normic provides
+                  the secure MCP connection, identity, permissions and
+                  capabilities.
+                </p>
+              </div>
+              <div className="owner-connection-action">
+                {view === "connected" ? (
+                  <span className="connection-state ready">CONNECTED</span>
+                ) : (
+                  <small>MCP ENDPOINT</small>
+                )}
+                <code>https://normic.tech/mcp</code>
+                {view === "connect" ? (
+                  <button type="button" onClick={() => void connectAgent()}>
+                    Connect Agent
+                  </button>
+                ) : identity ? (
+                  <p className="owner-connected-summary">
+                    {identity.company.name} · {identity.agent.name}
+                  </p>
+                ) : null}
+                <Link href="/connect">Open client instructions →</Link>
+              </div>
+            </>
+          ) : null}
+        </div>
+
+        <p className="owner-primary-message" role="status">
           {message}
         </p>
-      )}
+      </section>
 
       {identity ? (
         <>

@@ -172,6 +172,23 @@ function configuredVerifier(prefix: "NORMIC_AUTH" | "NORMIC_OWNER_AUTH") {
     issuer: verifierIssuer,
     audience: verifierAudience,
     jwksUrl,
+    ...(prefix === "NORMIC_OWNER_AUTH"
+      ? {
+          ownerIdentityResolver: async (owner) => {
+            const [user] = await database.query<{ verified: boolean }>(
+              `SELECT EXISTS (
+                 SELECT 1
+                 FROM auth.users
+                 WHERE id=$1
+                   AND email_confirmed_at IS NOT NULL
+                   AND lower(email)=lower($2)
+               ) AS verified`,
+              [owner.subject, owner.email],
+            );
+            return user?.verified === true;
+          },
+        }
+      : {}),
   });
 }
 const accessVerifier = configuredVerifier("NORMIC_AUTH");

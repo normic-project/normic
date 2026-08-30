@@ -10,6 +10,7 @@ export type OAuthVerifierConfig = {
   audience: string;
   jwksUrl: string;
   keyResolver?: JWTVerifyGetKey;
+  ownerIdentityResolver?: (owner: VerifiedOwner) => Promise<boolean>;
 };
 
 // Only operator-configured HTTPS key sets are used. Token-controlled jku/x5u URLs
@@ -84,17 +85,21 @@ export class OAuthTokenVerifier {
       const payload = await this.verify(token);
       const subject = z.uuid().parse(payload.sub);
       if (
-        payload.email_verified !== true ||
         payload.role !== "authenticated" ||
         payload.is_anonymous === true ||
         !payload.iss
       )
         throw new AuthenticationError();
-      return {
+      const owner = {
         issuer: payload.iss,
         subject,
         email: z.email().parse(payload.email).toLowerCase(),
       };
+      const emailVerified = this.config.ownerIdentityResolver
+        ? await this.config.ownerIdentityResolver(owner)
+        : payload.email_verified === true;
+      if (!emailVerified) throw new AuthenticationError();
+      return owner;
     } catch {
       throw new AuthenticationError(
         "A valid, verified owner session is required.",

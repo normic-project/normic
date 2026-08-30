@@ -2022,15 +2022,26 @@ select {
   display: grid;
 }
 .owner-auth-panel {
+  position: relative;
   width: min(820px, 100%);
+  min-height: 390px;
   margin: 58px auto 72px;
   padding: clamp(28px, 5vw, 48px);
+  display: grid;
+  border: 1px solid #0a0d18;
+  border-radius: 28px;
+  overflow: hidden;
+}
+.owner-primary-state {
   display: grid;
   grid-template-columns: minmax(200px, 0.78fr) minmax(300px, 1.22fr);
   gap: clamp(30px, 6vw, 72px);
   align-items: end;
-  border: 1px solid #0a0d18;
-  border-radius: 28px;
+  animation: owner-state-enter 420ms ease both;
+}
+.owner-loading-state {
+  grid-column: 1 / -1;
+  align-self: center;
 }
 .owner-auth-copy h2 {
   margin: 22px 0 14px;
@@ -2143,6 +2154,49 @@ select {
   background: #f2f3ee;
   color: #0a0d18;
 }
+.owner-account-control {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  z-index: 1;
+  padding: 7px 11px;
+  border: 0;
+  background: transparent;
+  color: #0a0d18;
+  font:
+    700 8px ui-monospace,
+    monospace;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  opacity: 0.58;
+}
+.owner-account-control:hover,
+.owner-account-control:focus-visible {
+  opacity: 1;
+}
+.owner-verification-state {
+  padding: 24px;
+  display: grid;
+  gap: 28px;
+  border: 1px solid #0a0d18;
+  border-radius: 20px;
+}
+.owner-verification-state span,
+.owner-connection-action small {
+  font:
+    700 8px ui-monospace,
+    monospace;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+.owner-verification-state p,
+.owner-connected-summary {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.65;
+  opacity: 0.72;
+}
 .owner-onboarding-form {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
@@ -2179,6 +2233,13 @@ select {
     monospace;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+.owner-primary-message {
+  align-self: end;
+  margin: 22px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  opacity: 0.62;
 }
 .connection-state {
   padding: 8px 12px;
@@ -2309,6 +2370,80 @@ select {
   justify-content: space-between;
 }
 
+.verification-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: color-mix(in srgb, #0a0d18 34%, transparent);
+}
+.verification-notice {
+  width: min(430px, 100%);
+  padding: clamp(28px, 5vw, 42px);
+  border: 1px solid #0a0d18;
+  border-radius: 26px;
+  background: #f2f3ee;
+  color: #0a0d18;
+  box-shadow: 0 24px 70px color-mix(in srgb, #0a0d18 24%, transparent);
+  animation: verification-notice-enter 420ms ease both;
+}
+.verification-notice > span {
+  font:
+    700 8px ui-monospace,
+    monospace;
+  letter-spacing: 0.1em;
+}
+.verification-notice h2 {
+  margin: 34px 0 10px;
+  color: #002b00;
+  font:
+    400 clamp(42px, 7vw, 60px)/0.95 "Iowan Old Style",
+    "Baskerville",
+    "Times New Roman",
+    serif;
+  letter-spacing: -0.05em;
+}
+.verification-notice p {
+  margin: 0 0 34px;
+  font-size: 14px;
+}
+.verification-notice button {
+  min-height: 44px;
+  padding: 0 20px;
+  border: 1px solid #002b00;
+  border-radius: 999px;
+  background: #002b00;
+  color: #f2f3ee;
+  font:
+    700 9px ui-monospace,
+    monospace;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+@keyframes owner-state-enter {
+  from {
+    opacity: 0;
+    transform: translateY(9px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes verification-notice-enter {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 /* Agent-facing documentation */
 .docs-head {
   margin-bottom: 0;
@@ -2416,6 +2551,9 @@ select {
   .docs-capabilities {
     grid-template-columns: 1fr;
   }
+  .owner-primary-state {
+    grid-template-columns: 1fr;
+  }
   .owner-connect-agent > .owner-connection-action,
   .owner-connect-agent > .owner-message,
   .owner-connect-agent > .owner-secret {
@@ -2432,6 +2570,12 @@ select {
     min-height: 260px;
     border-right: 0;
     border-bottom: 1px solid #0a0d18;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .owner-primary-state,
+  .verification-notice {
+    animation: none;
   }
 }
 @media (max-width: 560px) {
