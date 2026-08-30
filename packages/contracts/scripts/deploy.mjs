@@ -1,8 +1,10 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 import {
   createPublicClient,
   createWalletClient,
+  defineChain,
   http,
   encodeDeployData,
   erc20Abi,
@@ -13,18 +15,32 @@ import {
   zeroHash,
 } from "viem";
 import { compile } from "./compile.mjs";
+import {
+  assertExecutionDisabled,
+  getPrivyDeployer,
+} from "./privy-deployer.mjs";
+import {
+  createTransportDiagnosticTrace,
+  transportErrorDiagnostic,
+} from "./transport-diagnostics.mjs";
+import { reconcileDeploymentAttempts } from "./attempt-reconciliation.mjs";
 const root = fileURLToPath(new URL("../", import.meta.url));
 const USDG = "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168";
 const required = [
   "ROBINHOOD_RPC_URL",
-  "DEPLOYER_RPC_URL",
+  "PRIVY_APP_ID",
+  "PRIVY_APP_SECRET",
+  "PRIVY_DEPLOYER_WALLET_ID",
   "DEPLOYER_ADDRESS",
   "ADMIN_ADDRESS",
   "DISPUTE_RESOLVER_ADDRESS",
   "ADMIN_DELAY_SECONDS",
   "MAX_SERVICE_PAYMENT_USDG",
 ];
-async function main() {
+let deploymentStage = "PREFLIGHT";
+export async function main() {
+  deploymentStage = "PREFLIGHT";
+  assertExecutionDisabled(process.env);
   const missing = required.filter((k) => !process.env[k]);
   if (missing.length) {
     console.log(
@@ -50,7 +66,7 @@ async function main() {
   ])
     if (!isAddress(process.env[key]) || process.env[key] === zeroAddress)
       throw new Error("Invalid explicit deployment address.");
-  for (const key of ["ROBINHOOD_RPC_URL", "DEPLOYER_RPC_URL"]) {
+  for (const key of ["ROBINHOOD_RPC_URL"]) {
     const u = new URL(process.env[key]);
     if (
       u.protocol !== "https:" ||
@@ -65,15 +81,9 @@ async function main() {
   const read = createPublicClient({
     transport: http(process.env.ROBINHOOD_RPC_URL, { retryCount: 0 }),
   });
-  const signer = createWalletClient({
-    transport: http(process.env.DEPLOYER_RPC_URL, { retryCount: 0 }),
-    account: process.env.DEPLOYER_ADDRESS,
-  });
-  if (
-    (await read.getChainId()) !== 4663 ||
-    Number(await signer.request({ method: "eth_chainId" })) !== 4663
-  )
+  if ((await read.getChainId()) !== 4663)
     throw new Error("Wrong deployment chain.");
+  const deployer = await getPrivyDeployer(process.env);
   if (!(await read.getCode({ address: USDG })))
     throw new Error("Canonical token code missing.");
   const decimals = await read.readContract({
@@ -127,23 +137,69 @@ async function main() {
     args,
   });
   await read.call({ account: process.env.DEPLOYER_ADDRESS, data });
+  const gas = await read.estimateGas({
+    account: process.env.DEPLOYER_ADDRESS,
+    data,
+  });
+  const { maxFeePerGas, maxPriorityFeePerGas } = await read.estimateFeesPerGas({
+    type: "eip1559",
+  });
+  if (
+    maxFeePerGas <= 0n ||
+    maxPriorityFeePerGas < 0n ||
+    maxPriorityFeePerGas > maxFeePerGas
+  )
+    throw new Error("Invalid EIP-1559 deployment fee estimate.");
+  const maximumGasCost = gas * maxFeePerGas;
+  const deployerBalance = await read.getBalance({
+    address: process.env.DEPLOYER_ADDRESS,
+  });
+  if (deployerBalance < maximumGasCost)
+    throw new Error(
+      "Deployer balance is below the maximum deployment gas cost.",
+    );
+  console.log("ESTIMATED_DEPLOY_GAS:", gas.toString());
   if (!process.argv.includes("--broadcast")) {
     console.log(
       "Validated and simulated deployment. No transaction sent. Explicit --broadcast is required.",
     );
     return;
   }
-  if (
-    (await read.getChainId()) !== 4663 ||
-    Number(await signer.request({ method: "eth_chainId" })) !== 4663
-  )
+  assertExecutionDisabled(process.env);
+  if ((await read.getChainId()) !== 4663)
     throw new Error("Wrong chain before broadcast.");
+  await deployer.verify();
+  const submissionTrace = createTransportDiagnosticTrace();
+  const signer = createWalletClient({
+    chain: defineChain({
+      id: 4663,
+      name: "Robinhood Chain Mainnet",
+      nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+      rpcUrls: { default: { http: [process.env.ROBINHOOD_RPC_URL] } },
+    }),
+    transport: http(process.env.ROBINHOOD_RPC_URL, {
+      retryCount: 0,
+      onFetchRequest: submissionTrace.onFetchRequest,
+      onFetchResponse: submissionTrace.onFetchResponse,
+    }),
+    account: deployer.accountForDeployment(data, read, true),
+  });
   await mkdir(`${root}/deployments`, { recursive: true });
   const nonce = await read.getTransactionCount({
     address: process.env.DEPLOYER_ADDRESS,
     blockTag: "pending",
   });
-  const attemptPath = `${root}/deployments/attempt-4663-${process.env.DEPLOYER_ADDRESS.toLowerCase()}-${nonce}.json`;
+  const creationCodeHash = keccak256(data);
+  await reconcileDeploymentAttempts({
+    directory: `${root}/deployments`,
+    chainId: 4663,
+    deployer: process.env.DEPLOYER_ADDRESS,
+    nonce,
+    creationCodeHash,
+    read,
+  });
+  const attemptPath = `${root}/deployments/attempt-4663-${process.env.DEPLOYER_ADDRESS.toLowerCase()}-${nonce}-${Date.now()}.json`;
+  deploymentStage = "ATTEMPT_MARKER";
   await writeFile(
     attemptPath,
     JSON.stringify(
@@ -152,19 +208,53 @@ async function main() {
         chainId: 4663,
         deployer: process.env.DEPLOYER_ADDRESS,
         nonce,
-        creationCodeHash: keccak256(data),
+        creationCodeHash,
       },
       null,
       2,
     ),
     { flag: "wx" },
   );
-  const transactionHash = await signer.sendTransaction({
-    chain: null,
-    data,
-    nonce,
-  });
+  deploymentStage = "TRANSACTION_PREPARATION_SIGNING_OR_TRANSPORT";
+  let transactionHash;
+  try {
+    transactionHash = await signer.sendTransaction({
+      chainId: 4663,
+      data,
+      nonce,
+      gas,
+      maxFeePerGas,
+      maxPriorityFeePerGas,
+      type: "eip1559",
+      value: 0n,
+    });
+  } catch (error) {
+    // Viem errors retain request bodies, URLs, and signed bytes. Log only the
+    // allowlisted structural fields produced by this sanitizer.
+    console.error(
+      JSON.stringify(transportErrorDiagnostic(error, submissionTrace.state)),
+    );
+    throw new Error(
+      "Deployment transaction transport failed; see sanitized diagnostic.",
+    );
+  }
   // Persist the real hash immediately: never retry deployment after an uncertain receipt.
+  deploymentStage = "TRANSACTION_HASH_PERSISTENCE";
+  await writeFile(
+    attemptPath,
+    JSON.stringify(
+      {
+        status: "SUBMITTED",
+        chainId: 4663,
+        deployer: process.env.DEPLOYER_ADDRESS,
+        nonce,
+        creationCodeHash,
+        transactionHash,
+      },
+      null,
+      2,
+    ),
+  );
   const reportPath = `${root}/deployments/4663-${transactionHash}.json`;
   await writeFile(
     reportPath,
@@ -175,6 +265,7 @@ async function main() {
     ),
     { flag: "wx" },
   );
+  deploymentStage = "RECEIPT_AND_VERIFICATION";
   const receipt = await read.waitForTransactionReceipt({
     hash: transactionHash,
     timeout: 120_000,
@@ -204,13 +295,32 @@ async function main() {
     if (String(actual).toLowerCase() !== String(expected).toLowerCase())
       throw new Error("Post-deployment verification failed.");
   }
+  const runtimeHash = keccak256(code);
+  await writeFile(
+    attemptPath,
+    JSON.stringify(
+      {
+        status: "DEPLOYED",
+        chainId: 4663,
+        deployer: process.env.DEPLOYER_ADDRESS,
+        nonce,
+        creationCodeHash,
+        transactionHash,
+        contractAddress: address,
+        block: receipt.blockNumber.toString(),
+        runtimeHash,
+      },
+      null,
+      2,
+    ),
+  );
   const report = {
     status: "DEPLOYED_AWAITING_SOURCE_VERIFICATION_AND_FINALITY",
     chainId: 4663,
     address,
     transactionHash,
     block: receipt.blockNumber.toString(),
-    runtimeHash: keccak256(code),
+    runtimeHash,
     canonicalUSDG: USDG,
     decimals,
     maxPaymentUnits: maximum.toString(),
@@ -226,7 +336,7 @@ async function main() {
     "compiler_version",
     `v${result.compilerVersion.split(".Emscripten")[0]}`,
   );
-  form.append("contract_name", "NormicServiceEscrow.sol:NormicServiceEscrow");
+  form.append("contract_name", "NormicServiceEscrow");
   form.append(
     "files[0]",
     new Blob([JSON.stringify(result.input)], { type: "application/json" }),
@@ -261,9 +371,16 @@ async function main() {
     ),
   );
 }
-await main().catch(() => {
-  console.error(
-    "Deployment stopped. Inspect saved deployment reports before retrying. Provider errors and signing credentials are not logged.",
-  );
-  process.exitCode = 1;
-});
+if (
+  process.argv[1] &&
+  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+)
+  await main().catch(() => {
+    console.error(
+      JSON.stringify({ event: "DEPLOYMENT_STOPPED", stage: deploymentStage }),
+    );
+    console.error(
+      "Deployment stopped. Inspect saved deployment reports before retrying. Provider errors and signing credentials are not logged.",
+    );
+    process.exitCode = 1;
+  });

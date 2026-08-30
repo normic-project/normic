@@ -1,0 +1,11 @@
+{
+  "status": "DEPLOYED",
+  "chainId": 4663,
+  "deployer": "0x2F08D63de7B06C70F733eC446f5686A14B20aaD3",
+  "nonce": 0,
+  "creationCodeHash": "0x1446366d345c7b3abfc4635010229cce85c268d0452b304ccd91cd61904c15e0",
+  "transactionHash": "0x37aef093c76a9b78b0f3b1a684c9410f5b544e45b7f0da01ae73b0235e214a30",
+  "contractAddress": "0xda3ea8cd849ff916aa0ee6b1088f151c2fa51c47",
+  "block": "50271033",
+  "runtimeHash": "0xd333884f2e515b5e1264ff8a0d508c0184c5c1bc29eb50169f7e72b1e83338da"
+}
