@@ -31,6 +31,15 @@ const nextConfig: NextConfig = {
   transpilePackages: ["@normic/core", "@normic/mcp"],
   serverExternalPackages: ["@electric-sql/pglite", "postgres"],
   poweredByHeader: false,
+  headers() {
+    return ["/owner/:path*", "/oauth/consent/:path*"].map((source) => ({
+      source,
+      headers: [
+        { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+        { key: "X-Frame-Options", value: "DENY" },
+      ],
+    }));
+  },
 };
 
 export default nextConfig;

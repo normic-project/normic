@@ -16,6 +16,14 @@ for (const path of [
   const response = await fetch(`${origin}${path}`);
   if (!response.ok)
     throw new Error(`Web smoke failed for ${path}: ${response.status}`);
+  if (["/owner", "/oauth/consent"].includes(path)) {
+    if (
+      response.headers.get("content-security-policy") !==
+        "frame-ancestors 'none'" ||
+      response.headers.get("x-frame-options") !== "DENY"
+    )
+      throw new Error(`Framing protection is missing on ${path}.`);
+  }
   const html = await response.text();
   if (!html.includes("Normic"))
     throw new Error(`Web smoke returned unexpected content for ${path}.`);
@@ -50,6 +58,18 @@ for (const path of [
       "The empty database did not render its empty service state.",
     );
 }
+const api = await fetch(`${origin}/api`);
+if (!api.ok || !api.headers.get("content-type")?.includes("application/json"))
+  throw new Error("The public API index did not return JSON successfully.");
+const index = await api.json();
+if (
+  index.name !== "Normic API" ||
+  index.status !== "online" ||
+  index.version !== "v1" ||
+  index.routes?.status !== "/api/status" ||
+  index.routes?.v1 !== "/api/v1"
+)
+  throw new Error("The public API index does not match its documented routes.");
 for (const path of [
   "/services/00000000-0000-4000-8000-000000000000",
   "/company/00000000-0000-4000-8000-000000000000",
