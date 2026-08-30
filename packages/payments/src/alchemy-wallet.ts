@@ -2,11 +2,16 @@ import {
   toFunctionSelector,
   decodeFunctionData,
   verifyMessage,
+  keccak256,
+  toHex,
   type Hex,
 } from "viem";
 import {
+  CANONICAL_USDG,
+  FINANCIAL_CHAIN_ID,
   DomainError,
   PolicyDeniedError,
+  canonicalJson,
   escrowAbi,
   addressSchema,
   hashSchema,
@@ -23,18 +28,35 @@ import type { RobinhoodFinancialChain } from "./robinhood-finance.js";
  * EIP-712 owner authorization and provider-created permission grant before signing.
  * It is intentionally not a generic signHash endpoint and never returns private keys. */
 export interface SessionCustodian {
+  createSigner(input: {
+    companyId: string;
+    policyVersion: number;
+    idempotencyKey: string;
+  }): Promise<{ publicKey: EvmAddress; signerRef: string }>;
   verifyAuthorization(input: {
     wallet: FinancialWallet;
     session: FinancialSession;
     policy: SpendingPolicy;
     selectors: string[];
   }): Promise<{ ownerAuthorization: Hex }>;
+  approveOperation(input: {
+    wallet: FinancialWallet;
+    session: FinancialSession;
+    operation: PaymentOperation;
+    policy: SpendingPolicy;
+    selectors: Hex[];
+    chainId: 4663;
+  }): Promise<{ approvalTicket: string }>;
   signApprovedOperation(input: {
     wallet: FinancialWallet;
     session: FinancialSession;
     operation: PaymentOperation;
+    policy: SpendingPolicy;
+    selectors: Hex[];
+    approvalTicket: string;
     prepared: Record<string, unknown>;
   }): Promise<Hex>;
+  revoke(session: FinancialSession): Promise<void>;
 }
 const signatures = {
   fund: "fundWithSession((bytes32,address,address,address,uint256,uint64,uint64,uint64))",
@@ -44,13 +66,38 @@ const signatures = {
   dispute: "dispute(bytes32)",
   refund: "refund(bytes32)",
 } as const;
-export function sessionSelectors(policy: SpendingPolicy) {
+export function sessionSelectors(policy: SpendingPolicy): Hex[] {
   return [
     ...new Set(
       policy.allowedActions.map((a) => toFunctionSelector(signatures[a])),
     ),
   ].sort();
 }
+export function sessionPermissions(policy: SpendingPolicy) {
+  if (
+    policy.allowedToken.toLowerCase() !== CANONICAL_USDG.toLowerCase() ||
+    BigInt(policy.maxPerTransaction) > BigInt(policy.maxPerDay)
+  )
+    throw new PolicyDeniedError("Invalid USDG session permission limits.");
+  return [
+    {
+      type: "erc20-token-transfer" as const,
+      data: {
+        address: CANONICAL_USDG.toLowerCase() as EvmAddress,
+        allowance: toHex(BigInt(policy.maxPerDay)),
+      },
+    },
+    {
+      type: "functions-on-contract" as const,
+      data: {
+        address: policy.allowedContract.toLowerCase() as EvmAddress,
+        functions: sessionSelectors(policy),
+      },
+    },
+  ];
+}
+export const sessionPermissionDigest = (policy: SpendingPolicy) =>
+  keccak256(toHex(canonicalJson(sessionPermissions(policy))));
 export class AlchemyFinancialWallet implements FinancialWalletPort {
   readonly available: boolean;
   readonly autonomousAvailable: boolean;
@@ -111,15 +158,32 @@ export class AlchemyFinancialWallet implements FinancialWalletPort {
     const code = await this.chain.client!.getCode({ address });
     return { address, deployed: !!code && code !== "0x" };
   }
-  async prepareOwnerAuthorization(
+  async prepareSession(
     wallet: FinancialWallet,
     policy: SpendingPolicy,
-    publicKey: EvmAddress,
+    idempotencyKey: string,
   ) {
-    await this.chain.validateEscrow();
+    if (!this.custodian)
+      throw new DomainError(
+        "A reviewed secure session custodian integration is required.",
+        "FINANCIAL_UNAVAILABLE",
+      );
+    const escrow = await this.chain.validateEscrow();
+    if (
+      wallet.chainId !== FINANCIAL_CHAIN_ID ||
+      policy.allowedToken.toLowerCase() !== CANONICAL_USDG.toLowerCase() ||
+      policy.allowedContract.toLowerCase() !== escrow.address ||
+      new Date(policy.sessionExpiresAt) <= new Date()
+    )
+      throw new PolicyDeniedError("Invalid financial session policy.");
+    const { publicKey, signerRef } = await this.custodian.createSigner({
+      companyId: wallet.companyId,
+      policyVersion: policy.version,
+      idempotencyKey,
+    });
     if (publicKey.toLowerCase() === wallet.ownerAddress.toLowerCase())
       throw new PolicyDeniedError("The session key cannot be the owner key.");
-    return this.request("wallet_createSession", [
+    const result = (await this.request("wallet_createSession", [
       {
         account: wallet.address,
         chainId: "0x1237",
@@ -127,17 +191,42 @@ export class AlchemyFinancialWallet implements FinancialWalletPort {
           new Date(policy.sessionExpiresAt).getTime() / 1000,
         ),
         key: { publicKey, type: "secp256k1" },
-        permissions: [
-          {
-            type: "functions-on-contract",
-            data: {
-              address: policy.allowedContract,
-              functions: sessionSelectors(policy),
-            },
-          },
-        ],
+        permissions: sessionPermissions(policy),
       },
-    ]);
+    ])) as {
+      sessionId?: unknown;
+      signatureRequest?: {
+        type?: unknown;
+        data?: unknown;
+        rawPayload?: unknown;
+      };
+    };
+    const request = result.signatureRequest;
+    if (
+      typeof result.sessionId !== "string" ||
+      result.sessionId.length > 512 ||
+      request?.type !== "eth_signTypedData_v4" ||
+      !request.data ||
+      typeof request.data !== "object" ||
+      typeof request.rawPayload !== "string"
+    )
+      throw new DomainError(
+        "The wallet provider returned an invalid session authorization.",
+        "FINANCIAL_UNAVAILABLE",
+      );
+    const rawPayload = hashSchema.parse(request.rawPayload);
+    return {
+      publicKey,
+      providerSessionId: result.sessionId,
+      signerRef,
+      ownerAuthorizationPayload: rawPayload,
+      permissionDigest: sessionPermissionDigest(policy),
+      ownerSignatureRequest: {
+        type: "eth_signTypedData_v4" as const,
+        data: request.data as Record<string, unknown>,
+        rawPayload,
+      },
+    };
   }
   async validateSession(
     wallet: FinancialWallet,
@@ -158,6 +247,10 @@ export class AlchemyFinancialWallet implements FinancialWalletPort {
       escrow.address !== policy.allowedContract.toLowerCase()
     )
       throw new PolicyDeniedError("Financial session is not authorized.");
+    if (session.permissionDigest !== sessionPermissionDigest(policy))
+      throw new PolicyDeniedError(
+        "Onchain session permissions do not match the owner policy.",
+      );
     const onchain = (await this.chain.client!.readContract({
       address: escrow.address,
       abi: escrowAbi,
@@ -216,6 +309,14 @@ export class AlchemyFinancialWallet implements FinancialWalletPort {
       policy,
       selectors: sessionSelectors(policy),
     });
+    const approved = await this.custodian.approveOperation({
+      wallet,
+      session,
+      operation,
+      policy,
+      selectors: sessionSelectors(policy),
+      chainId: FINANCIAL_CHAIN_ID,
+    });
     const permissions = {
       sessionId: session.providerSessionId,
       signature: grant.ownerAuthorization,
@@ -239,12 +340,20 @@ export class AlchemyFinancialWallet implements FinancialWalletPort {
     };
     if (request?.type !== "personal_sign" || !request.data?.raw)
       throw new Error("Unexpected wallet signature request.");
+    await this.chain.validateChain();
+    const preparedForSigning = structuredClone(prepared),
+      preparedDigest = keccak256(toHex(canonicalJson(preparedForSigning)));
     const signature = await this.custodian.signApprovedOperation({
       wallet,
       session,
       operation,
-      prepared,
+      policy,
+      selectors: sessionSelectors(policy),
+      approvalTicket: approved.approvalTicket,
+      prepared: preparedForSigning,
     });
+    if (preparedDigest !== keccak256(toHex(canonicalJson(preparedForSigning))))
+      throw new Error("Prepared wallet operation changed during signing.");
     if (
       !(await verifyMessage({
         address: session.publicKey,
@@ -271,7 +380,8 @@ export class AlchemyFinancialWallet implements FinancialWalletPort {
       throw new Error("Unknown submission response. Do not resubmit.");
     return { callId: id };
   }
-  async revoke(_session: FinancialSession): Promise<void> {
+  async revoke(session: FinancialSession): Promise<void> {
+    await this.custodian?.revoke(session);
     throw new DomainError(
       "Revoke wallet permissions with the owner wallet. Normic local execution is already blocked.",
       "OWNER_ACTION_REQUIRED",

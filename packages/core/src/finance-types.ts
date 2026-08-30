@@ -61,9 +61,26 @@ export type FinancialSession = {
   publicKey: EvmAddress;
   providerSessionId: string;
   authorizationRef: string;
+  signerRef: string;
+  ownerAuthorization: `0x${string}`;
+  ownerAuthorizationPayload: EvmHash;
+  permissionDigest: EvmHash;
   expiresAt: string;
   revokedAt: string | null;
   policyVersion: number;
+  createdAt: string;
+};
+export type FinancialSessionAuthorization = {
+  id: string;
+  companyId: string;
+  publicKey: EvmAddress;
+  providerSessionId: string;
+  signerRef: string;
+  ownerAuthorizationPayload: EvmHash;
+  permissionDigest: EvmHash;
+  expiresAt: string;
+  policyVersion: number;
+  consumedAt: string | null;
   createdAt: string;
 };
 export type PaidInvocation = {
@@ -217,6 +234,22 @@ export interface FinancialWalletPort {
   requestAccount(
     ownerAddress: EvmAddress,
   ): Promise<{ address: EvmAddress; deployed: boolean }>;
+  prepareSession(
+    wallet: FinancialWallet,
+    policy: SpendingPolicy,
+    idempotencyKey: string,
+  ): Promise<{
+    publicKey: EvmAddress;
+    providerSessionId: string;
+    signerRef: string;
+    ownerAuthorizationPayload: EvmHash;
+    permissionDigest: EvmHash;
+    ownerSignatureRequest: {
+      type: "eth_signTypedData_v4";
+      data: Record<string, unknown>;
+      rawPayload: EvmHash;
+    };
+  }>;
   validateSession(
     wallet: FinancialWallet,
     session: FinancialSession,
@@ -274,6 +307,13 @@ export interface FinancialRepository {
   savePolicy(policy: SpendingPolicy): Promise<void>;
   getSession(companyId: string): Promise<FinancialSession | null>;
   saveSession(session: FinancialSession): Promise<void>;
+  getSessionAuthorization(
+    id: string,
+    lock?: boolean,
+  ): Promise<FinancialSessionAuthorization | null>;
+  saveSessionAuthorization(
+    authorization: FinancialSessionAuthorization,
+  ): Promise<void>;
   createInvocation(invocation: PaidInvocation): Promise<void>;
   getInvocation(id: string, lock?: boolean): Promise<PaidInvocation | null>;
   getInvocationByOnchainId(id: EvmHash): Promise<PaidInvocation | null>;

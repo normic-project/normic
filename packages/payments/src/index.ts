@@ -1,5 +1,6 @@
 export * from "./robinhood-finance.js";
 export * from "./alchemy-wallet.js";
+export * from "./privy-session-custodian.js";
 export * from "./runtime.js";
 export * from "./alchemy-trading-wallet.js";
 export type PaymentIntent = {

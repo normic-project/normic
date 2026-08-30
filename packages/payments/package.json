@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@normic/core": "workspace:*",
+    "@privy-io/node": "^0.34.0",
     "viem": "2.56.0"
   },
   "devDependencies": {

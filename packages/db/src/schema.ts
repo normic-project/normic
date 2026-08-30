@@ -581,6 +581,27 @@ export const financialSessions = pgTable("financial_sessions", {
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
   data: jsonb("data").notNull(),
 });
+export const financialSessionAuthorizations = pgTable(
+  "financial_session_authorizations",
+  {
+    id: uuid("id").primaryKey(),
+    companyId: uuid("company_id")
+      .notNull()
+      .references(() => financialWallets.companyId),
+    publicKey: text("public_key").notNull(),
+    providerSessionId: text("provider_session_id").notNull().unique(),
+    signerRef: text("signer_ref").notNull().unique(),
+    ownerAuthorizationPayload: text("owner_authorization_payload").notNull(),
+    permissionDigest: text("permission_digest").notNull(),
+    policyVersion: integer("policy_version").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    data: jsonb("data").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+);
 export const paidInvocations = pgTable("paid_invocations", {
   id: uuid("id").primaryKey(),
   onchainId: text("onchain_id").notNull().unique(),

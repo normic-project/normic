@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { type FinancialService, spendingPolicySchema } from "./finance.js";
-import { addressSchema, hashSchema } from "./finance-protocol.js";
+import { hashSchema } from "./finance-protocol.js";
 import type { FinancialActor } from "./finance-types.js";
 import { requestServiceSchema, submitResultSchema } from "./schemas.js";
 import { CapabilityBlockedError, DomainError } from "./errors.js";
@@ -16,13 +16,15 @@ export const financialInputs = {
   get_transactions: company,
   update_spending_policy: spendingPolicySchema,
   revoke_financial_session: company,
+  prepare_financial_session: company,
   connect_wallet: company.extend({
     walletProofToken: z.string().min(1).max(200),
   }),
   register_financial_session: company.extend({
-    publicKey: addressSchema,
-    providerSessionId: z.string().min(1).max(256),
-    authorizationRef: z.string().min(1).max(256),
+    authorizationRef: z.uuid(),
+    ownerAuthorization: z
+      .string()
+      .regex(/^0x(?:[0-9a-fA-F]{128}|[0-9a-fA-F]{130})$/),
   }),
   request_service: requestServiceSchema,
   get_payment_requirement: invocation,
@@ -64,6 +66,7 @@ export const financialCommandRequiresReadyCapability = (
 ) =>
   [
     "connect_wallet",
+    "prepare_financial_session",
     "register_financial_session",
     "fund_service",
     "accept_result",
@@ -108,6 +111,12 @@ export async function runFinancialCommand(
       );
     case "revoke_financial_session":
       return f.revokeSession(a, company.parse(raw).companyId, key);
+    case "prepare_financial_session":
+      return f.prepareSessionAuthorization(
+        a,
+        company.parse(raw).companyId,
+        key,
+      );
     case "connect_wallet": {
       const p = financialInputs.connect_wallet.parse(raw);
       return f.createWallet(a, p.companyId, p.walletProofToken, key);

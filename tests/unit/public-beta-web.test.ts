@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
-import nextConfig from "../../apps/web/next.config";
+import nextConfig, { contentSecurityPolicy } from "../../apps/web/next.config";
 import { GET } from "../../apps/web/src/app/api/route";
 
 const requireFromWeb = createRequire(
@@ -20,6 +20,14 @@ async function headersFor(path: string) {
 }
 
 describe("public-beta web boundaries", () => {
+  const expectedHeaders = [
+    {
+      key: "Content-Security-Policy",
+      value: contentSecurityPolicy(process.env.NEXT_PUBLIC_SUPABASE_URL),
+    },
+    { key: "X-Frame-Options", value: "DENY" },
+  ];
+
   it.each([
     "/owner",
     "/owner/",
@@ -30,10 +38,7 @@ describe("public-beta web boundaries", () => {
   ])(
     "blocks framing of %s without restricting OAuth navigation",
     async (path) => {
-      expect(await headersFor(path)).toEqual([
-        { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
-        { key: "X-Frame-Options", value: "DENY" },
-      ]);
+      expect(await headersFor(path)).toEqual(expectedHeaders);
     },
   );
 
@@ -48,10 +53,37 @@ describe("public-beta web boundaries", () => {
     "/.well-known/oauth-protected-resource/mcp",
     "/owner-other",
     "/oauth/consent-other",
-  ])("does not change headers or routing for %s", async (path) => {
-    expect(await headersFor(path)).toEqual([]);
-    expect(nextConfig.redirects).toBeUndefined();
-    expect(nextConfig.rewrites).toBeUndefined();
+  ])(
+    "preserves routing while applying security headers to %s",
+    async (path) => {
+      expect(await headersFor(path)).toEqual(expectedHeaders);
+      expect(nextConfig.redirects).toBeUndefined();
+      expect(nextConfig.rewrites).toBeUndefined();
+    },
+  );
+
+  it("allows only documented Privy resources and the configured Supabase origin", () => {
+    const policy = contentSecurityPolicy(
+      "https://project-ref.supabase.co/auth/v1",
+    );
+    expect(policy).toBe(
+      "frame-ancestors 'none'; " +
+        "child-src https://auth.privy.io https://verify.walletconnect.com https://verify.walletconnect.org; " +
+        "frame-src https://auth.privy.io https://verify.walletconnect.com https://verify.walletconnect.org; " +
+        "connect-src 'self' https://project-ref.supabase.co https://auth.privy.io wss://relay.walletconnect.com wss://relay.walletconnect.org wss://www.walletlink.org https://*.rpc.privy.systems https://explorer-api.walletconnect.com",
+    );
+    expect(policy).not.toContain("frame-ancestors *");
+    expect(policy).not.toContain("frame-src *");
+    expect(policy).not.toContain("connect-src *");
+  });
+
+  it("rejects unsafe Supabase origins before constructing a header", () => {
+    expect(() => contentSecurityPolicy("http://supabase.example")).toThrow(
+      "valid HTTPS origin",
+    );
+    expect(() =>
+      contentSecurityPolicy("https://user:password@supabase.example"),
+    ).toThrow("valid HTTPS origin");
   });
 
   it("serves only the public API index without exposing configuration", async () => {

@@ -91,6 +91,10 @@ describe("Phase 4 isolated financial integration", () => {
         publicKey: address(i + 21),
         providerSessionId: `isolated-${i}`,
         authorizationRef: `isolated/${i}`,
+        signerRef: `privy-isolated-${i}`,
+        ownerAuthorization: `0x${"11".repeat(65)}`,
+        ownerAuthorizationPayload: hash(i + 200),
+        permissionDigest: hash(i + 300),
         expiresAt: policy.sessionExpiresAt,
         revokedAt: null,
         policyVersion: 1,
@@ -159,6 +163,18 @@ describe("Phase 4 isolated financial integration", () => {
       available: true,
       autonomousAvailable: true,
       requestAccount: async () => ({ address: address(1), deployed: true }),
+      prepareSession: async () => ({
+        publicKey: address(21),
+        providerSessionId: "isolated-prepared-session",
+        signerRef: "privy-isolated-prepared",
+        ownerAuthorizationPayload: hash(201),
+        permissionDigest: hash(301),
+        ownerSignatureRequest: {
+          type: "eth_signTypedData_v4",
+          data: {},
+          rawPayload: hash(201),
+        },
+      }),
       validateSession: async () => {},
       execute: vi.fn(async () => ({ callId: "isolated-call" })),
       revoke: async () => {},
@@ -329,6 +345,60 @@ describe("Phase 4 isolated financial integration", () => {
       [buyer.context.principal.credentialId],
     );
     await expect(f.getWallet(a, buyer.companyId)).rejects.toThrow();
+  });
+  it("creates a session only from a trusted owner-prepared authorization", async () => {
+    const issuer = "https://auth.normic.test",
+      subject = crypto.randomUUID(),
+      existing = (await repo.getSession(buyer.companyId))!;
+    await rt.database.query(
+      "UPDATE users SET auth_issuer=$2,auth_subject=$3 WHERE id=$1",
+      [buyer.userId, issuer, subject],
+    );
+    await repo.saveSession({
+      ...existing,
+      revokedAt: new Date().toISOString(),
+    });
+    const owner: FinancialActor = {
+      kind: "owner",
+      owner: { issuer, subject, email: "owner@example.com" },
+    };
+    const prepared = await f.prepareSessionAuthorization(
+      owner,
+      buyer.companyId,
+      "prepare-owner-session",
+    );
+    const registered = await f.registerSession(
+      owner,
+      {
+        companyId: buyer.companyId,
+        authorizationRef: prepared.authorizationRef,
+        ownerAuthorization: `0x${"44".repeat(65)}`,
+      },
+      "register-owner-session",
+    );
+    const session = await repo.getSession(buyer.companyId),
+      authorization = await repo.getSessionAuthorization(
+        prepared.authorizationRef,
+      );
+    expect(registered.publicKey).toBe(address(21));
+    expect(session).toMatchObject({
+      signerRef: "privy-isolated-prepared",
+      providerSessionId: "isolated-prepared-session",
+      authorizationRef: prepared.authorizationRef,
+      permissionDigest: hash(301),
+    });
+    expect(authorization?.consumedAt).not.toBeNull();
+    await expect(
+      f.registerSession(
+        owner,
+        {
+          companyId: buyer.companyId,
+          authorizationRef: prepared.authorizationRef,
+          ownerAuthorization: `0x${"55".repeat(65)}`,
+        },
+        "replay-consumed-authorization",
+      ),
+    ).rejects.toThrow("invalid or expired");
   });
   it("simulation failure never broadcasts; ambiguous broadcast never retries", async () => {
     const i = await request(),

@@ -36,6 +36,7 @@ import {
   type SpendingPolicy,
   type VerifiedEscrowEvent,
   type FinancialSession,
+  type FinancialSessionAuthorization,
   type SafeCall,
 } from "./finance-types.js";
 
@@ -475,9 +476,8 @@ export class FinancialService {
     a: FinancialActor,
     input: {
       companyId: string;
-      publicKey: string;
-      providerSessionId: string;
       authorizationRef: string;
+      ownerAuthorization: string;
     },
     key: string,
   ) {
@@ -488,9 +488,10 @@ export class FinancialService {
     const p = z
       .object({
         companyId: z.uuid(),
-        publicKey: addressSchema,
-        providerSessionId: z.string().min(1).max(256),
-        authorizationRef: z.string().regex(/^[a-zA-Z0-9_./:-]{1,256}$/),
+        authorizationRef: z.uuid(),
+        ownerAuthorization: z
+          .string()
+          .regex(/^0x(?:[0-9a-fA-F]{128}|[0-9a-fA-F]{130})$/),
       })
       .strict()
       .parse(input);
@@ -502,12 +503,30 @@ export class FinancialService {
       p.companyId,
       async (r) => {
         const wallet = await r.getWallet(p.companyId),
-          policy = await r.getPolicy(p.companyId);
+          policy = await r.getPolicy(p.companyId),
+          authorization = await r.getSessionAuthorization(
+            p.authorizationRef,
+            true,
+          );
         if (!wallet || !policy?.enabled)
           throw new PolicyDeniedError(
             "Configure an enabled owner policy first.",
           );
-        if (p.publicKey.toLowerCase() === wallet.ownerAddress.toLowerCase())
+        if (
+          !authorization ||
+          authorization.companyId !== p.companyId ||
+          authorization.consumedAt ||
+          authorization.policyVersion !== policy.version ||
+          authorization.expiresAt !== policy.sessionExpiresAt ||
+          new Date(authorization.expiresAt) <= new Date()
+        )
+          throw new PolicyDeniedError(
+            "The trusted session authorization is invalid or expired.",
+          );
+        if (
+          authorization.publicKey.toLowerCase() ===
+          wallet.ownerAddress.toLowerCase()
+        )
           throw new PolicyDeniedError(
             "The session key must not be the owner's root key.",
           );
@@ -516,8 +535,15 @@ export class FinancialService {
             "Revoke the existing session before authorizing another.",
           );
         const session: FinancialSession = {
-          ...p,
           id: randomUUID(),
+          companyId: p.companyId,
+          publicKey: authorization.publicKey,
+          providerSessionId: authorization.providerSessionId,
+          authorizationRef: authorization.id,
+          signerRef: authorization.signerRef,
+          ownerAuthorization: p.ownerAuthorization as `0x${string}`,
+          ownerAuthorizationPayload: authorization.ownerAuthorizationPayload,
+          permissionDigest: authorization.permissionDigest,
           expiresAt: policy.sessionExpiresAt,
           revokedAt: null,
           policyVersion: policy.version,
@@ -525,6 +551,10 @@ export class FinancialService {
         };
         await this.wallets.validateSession(wallet, session, policy);
         await r.saveSession(session);
+        await r.saveSessionAuthorization({
+          ...authorization,
+          consumedAt: new Date().toISOString(),
+        });
         return {
           id: session.id,
           publicKey: session.publicKey,
@@ -534,12 +564,65 @@ export class FinancialService {
       },
     );
   }
+
+  async prepareSessionAuthorization(
+    a: FinancialActor,
+    companyId: string,
+    key: string,
+  ) {
+    if (a.kind !== "owner")
+      throw new AuthorizationError(
+        "A verified owner must prepare financial sessions.",
+      );
+    z.uuid().parse(companyId);
+    return this.mutate(
+      a,
+      "financial.session_prepared",
+      key,
+      { companyId },
+      companyId,
+      async (r) => {
+        const wallet = await r.getWallet(companyId),
+          policy = await r.getPolicy(companyId);
+        if (!wallet || !policy?.enabled)
+          throw new PolicyDeniedError(
+            "Configure an enabled owner policy first.",
+          );
+        if (await r.getSession(companyId))
+          throw new ConflictError(
+            "Revoke the existing session before authorizing another.",
+          );
+        const prepared = await this.wallets.prepareSession(wallet, policy, key);
+        const authorization: FinancialSessionAuthorization = {
+          id: randomUUID(),
+          companyId,
+          publicKey: prepared.publicKey,
+          providerSessionId: prepared.providerSessionId,
+          signerRef: prepared.signerRef,
+          ownerAuthorizationPayload: prepared.ownerAuthorizationPayload,
+          permissionDigest: prepared.permissionDigest,
+          expiresAt: policy.sessionExpiresAt,
+          policyVersion: policy.version,
+          consumedAt: null,
+          createdAt: new Date().toISOString(),
+        };
+        await r.saveSessionAuthorization(authorization);
+        return {
+          authorizationRef: authorization.id,
+          publicKey: authorization.publicKey,
+          expiresAt: authorization.expiresAt,
+          ownerSignatureRequest: prepared.ownerSignatureRequest,
+        };
+      },
+    );
+  }
   async revokeSession(a: FinancialActor, companyId: string, key: string) {
     if (a.kind !== "owner")
       throw new AuthorizationError(
         "A verified owner must revoke the financial session.",
       );
-    return this.mutate(
+    let revokedSession: FinancialSession | null = null;
+    const result = await this.mutate(
       a,
       "financial.session_revoked",
       key,
@@ -555,8 +638,10 @@ export class FinancialService {
             version: p.version + 1,
             updatedAt: new Date().toISOString(),
           });
-        if (s)
+        if (s) {
+          revokedSession = s;
           await r.saveSession({ ...s, revokedAt: new Date().toISOString() });
+        }
         return {
           localExecution: "blocked",
           onchainRevocation: "owner_action_required",
@@ -565,6 +650,16 @@ export class FinancialService {
         };
       },
     );
+    if (revokedSession)
+      try {
+        await this.wallets.revoke(revokedSession);
+      } catch (error) {
+        if (!(
+          error instanceof DomainError && error.code === "OWNER_ACTION_REQUIRED"
+        ))
+          throw error;
+      }
+    return result;
   }
   async requestService(
     a: FinancialActor,

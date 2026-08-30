@@ -4,13 +4,20 @@ import {
   AlchemyFinancialWallet,
   type SessionCustodian,
 } from "./alchemy-wallet.js";
+import { createPrivySessionCustodianFromEnvironment } from "./privy-session-custodian.js";
 export function createFinancialRuntime(
   repository: FinancialRepository,
   env: Record<string, string | undefined>,
   custodian?: SessionCustodian,
 ) {
+  const sessionCustodian =
+    custodian ?? createPrivySessionCustodianFromEnvironment(env);
   const chain = new RobinhoodFinancialChain(env),
-    wallets = new AlchemyFinancialWallet(chain, env.ALCHEMY_API_KEY, custodian);
+    wallets = new AlchemyFinancialWallet(
+      chain,
+      env.ALCHEMY_API_KEY,
+      sessionCustodian,
+    );
   return new FinancialService(repository, chain, wallets, {
     origin:
       env.NEXT_PUBLIC_APP_URL ??

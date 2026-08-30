@@ -8,6 +8,7 @@ import {
   type FinancialWallet,
   type SpendingPolicy,
   type FinancialSession,
+  type FinancialSessionAuthorization,
   type PaidInvocation,
   type PaymentOperation,
   type VerifiedEscrowEvent,
@@ -154,6 +155,31 @@ export class PostgresFinancialRepository implements FinancialRepository {
     await this.db.query(
       "INSERT INTO financial_sessions(id,company_id,expires_at,revoked_at,data) VALUES($1,$2,$3,$4,$5::jsonb) ON CONFLICT(id) DO UPDATE SET revoked_at=EXCLUDED.revoked_at,data=EXCLUDED.data",
       [s.id, s.companyId, s.expiresAt, s.revokedAt, JSON.stringify(s)],
+    );
+  }
+  getSessionAuthorization(id: string, lock = false) {
+    return this.data<FinancialSessionAuthorization>(
+      `SELECT data FROM financial_session_authorizations WHERE id=$1${lock ? " FOR UPDATE" : ""}`,
+      [id],
+    );
+  }
+  async saveSessionAuthorization(s: FinancialSessionAuthorization) {
+    await this.db.query(
+      "INSERT INTO financial_session_authorizations(id,company_id,public_key,provider_session_id,signer_ref,owner_authorization_payload,permission_digest,policy_version,expires_at,consumed_at,data,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12) ON CONFLICT(id) DO UPDATE SET consumed_at=EXCLUDED.consumed_at,data=EXCLUDED.data",
+      [
+        s.id,
+        s.companyId,
+        s.publicKey.toLowerCase(),
+        s.providerSessionId,
+        s.signerRef,
+        s.ownerAuthorizationPayload.toLowerCase(),
+        s.permissionDigest.toLowerCase(),
+        s.policyVersion,
+        s.expiresAt,
+        s.consumedAt,
+        JSON.stringify(s),
+        s.createdAt,
+      ],
     );
   }
   async createInvocation(i: PaidInvocation) {
