@@ -189,6 +189,7 @@ export function SystemStory() {
       </section>
 
       <section className="landing-connect" data-story-scene="5">
+        <FlowingLines />
         <div className="scene-label">
           <span>05</span>
           <span>CONNECT</span>
@@ -223,6 +224,29 @@ export function SystemStory() {
         </div>
       </footer>
     </main>
+  );
+}
+
+function FlowingLines() {
+  const paths = (
+    <g className="flowing-lines-field">
+      <path d="M0 280C240 80 480 80 720 280C960 480 1200 480 1440 280" />
+      <path d="M0 420C240 620 480 620 720 420C960 220 1200 220 1440 420" />
+      <path d="M0 350C200 200 520 260 720 350C920 440 1240 500 1440 350" />
+    </g>
+  );
+  return (
+    <svg
+      className="flowing-lines"
+      viewBox="0 0 1440 720"
+      preserveAspectRatio="xMidYMid slice"
+      aria-hidden="true"
+    >
+      <g className="flowing-lines-track">
+        {paths}
+        <g transform="translate(1440 0)">{paths}</g>
+      </g>
+    </svg>
   );
 }
 

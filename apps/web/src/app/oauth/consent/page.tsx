@@ -3,7 +3,6 @@ import { OAuthConsent } from "./oauth-consent";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = {
-  title: "Authorize MCP client",
   robots: { index: false, follow: false },
 };
 
