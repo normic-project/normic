@@ -7,6 +7,9 @@ export const metadata: Metadata = {
     process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000",
   ),
   title: "Normic",
+  other: {
+    "virtual-protocol-site-verification": "7b1f45799c8ba13ba5a6d0f9ab01d26f",
+  },
   description:
     "Financial infrastructure for autonomous agents: identity, service coordination, market access, and owner-controlled autonomy through MCP.",
   openGraph: {
