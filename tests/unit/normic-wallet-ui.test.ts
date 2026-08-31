@@ -97,6 +97,7 @@ beforeEach(() => {
       if (command === "get_wallet") return Response.json(storedWallet);
       if (command === "prepare_canary_review")
         return Response.json({
+          role: (requests.at(-1)!.body as { role: string }).role,
           wallet: wallet.address,
           expiresAt: new Date(Date.now() + 3600000).toISOString(),
           escrow: `0x${"55".repeat(20)}`,
@@ -293,6 +294,22 @@ describe("Create Normic Wallet", () => {
     expect(container.querySelector("button")?.textContent).toBe(
       "Prepare canary review",
     );
+    expect(mocks.startRegistration).not.toHaveBeenCalled();
+  });
+  it("reviews provider accept/submit permissions without buyer spending or a passkey prompt", async () => {
+    state = "provisioned";
+    storedWallet = wallet;
+    await render();
+    const select = container.querySelector("select")!;
+    await act(async () => {
+      select.value = "provider";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await click();
+    expect((requests.at(-1)!.body as { role: string }).role).toBe("provider");
+    expect(container.textContent).toContain("Accept + submit only");
+    expect(container.textContent).toContain("No USDG spending authority");
+    expect(container.textContent).not.toContain("0.01 USDG per transaction");
     expect(mocks.startRegistration).not.toHaveBeenCalled();
   });
   it("resumes provider failure without enrolling a second passkey", async () => {

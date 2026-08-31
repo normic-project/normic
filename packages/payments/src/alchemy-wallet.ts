@@ -36,6 +36,7 @@ import {
 } from "@normic/core";
 import {
   canaryOwnerCalls,
+  canaryGasFailureReason,
   canarySessionInstall,
   CANARY_ESCROW,
   canaryChain,
@@ -307,8 +308,12 @@ export class AlchemyFinancialWallet implements FinancialWalletPort {
     credential: FinancialWebAuthnCredential;
     preparedAt: number;
     prepareSessionSigner: boolean;
+    role?: "buyer" | "provider";
   }): Promise<CanaryOwnerPreparation> {
     const { wallet, credential } = input;
+    const role = input.role ?? "buyer";
+    if (role !== "buyer" && role !== "provider")
+      throw new PolicyDeniedError("Invalid canary role.");
     if (
       !this.rpcUrl ||
       !this.apiKey ||
@@ -362,22 +367,21 @@ export class AlchemyFinancialWallet implements FinancialWalletPort {
       preparedAt: input.preparedAt,
       escrow: escrow.address,
       chainId: wallet.chainId,
+      role,
     });
     let sessionInstall: CanaryOwnerPreparation["sessionInstall"] = null;
     let sessionPublicKey: EvmAddress | null = null;
     let trustedSignerRef: string | undefined;
-    if (
-      input.prepareSessionSigner &&
-      BigInt(balances.usdg.units) >= 10000n &&
-      !plan.allowanceReductionRequired
-    ) {
+    const ownerRevocationCalls: CanaryOwnerPreparation["ownerRevocationCalls"] =
+      [];
+    if (input.prepareSessionSigner && !plan.allowanceReductionRequired) {
       if (!this.custodian)
         throw new DomainError(
           "A Privy scoped signer is required.",
           "FINANCIAL_UNAVAILABLE",
         );
       // Separate signer creation is offchain and idempotent. Never use the deployer
-      // or a root signer, and never create this before a real provider exists.
+      // or a root signer. Preparation never activates this signer onchain.
       const signer = await this.custodian.createSigner({
         companyId: wallet.companyId,
         policyVersion: 1,
@@ -388,7 +392,7 @@ export class AlchemyFinancialWallet implements FinancialWalletPort {
         wallet: wallet.address,
         expiry: plan.expiry,
         preparedAt: input.preparedAt,
-        role: "buyer",
+        role,
       });
       for (const address of new Set([
         install.validationConfig.moduleAddress,
@@ -404,6 +408,7 @@ export class AlchemyFinancialWallet implements FinancialWalletPort {
       sessionInstall = install.call;
       sessionPublicKey = signer.publicKey;
       trustedSignerRef = signer.signerRef;
+      ownerRevocationCalls.push(install.revokeCall);
     }
     const ownerCalls = sessionInstall
       ? [...plan.calls, sessionInstall]
@@ -411,7 +416,9 @@ export class AlchemyFinancialWallet implements FinancialWalletPort {
     const client = await createModularAccountV2Client({
       mode: "webauthn",
       chain: canaryChain,
-      transport: http(this.rpcUrl, { retryCount: 0, timeout: 10_000 }),
+      // Real counterfactual bundler simulations can exceed the ordinary read timeout.
+      // This extends only unsigned preparation, with no automatic retry or submission.
+      transport: http(this.rpcUrl, { retryCount: 0, timeout: 30_000 }),
       credential: { id: credential.credentialId, publicKey },
       rpId: "normic.tech",
       getFn: async () => {
@@ -433,6 +440,10 @@ export class AlchemyFinancialWallet implements FinancialWalletPort {
       reason: "OWNER_USEROP_ESTIMATE_UNAVAILABLE",
     };
     try {
+      if (!ownerCalls.length)
+        throw new Error(
+          "Session installation is required for the provider estimate.",
+        );
       // buildUserOperation uses only the SDK estimation stub, NEVER the root signer.
       const op = await client.buildUserOperation({
         uo: ownerCalls.map((c) => ({ target: c.to, data: c.data, value: 0n })),
@@ -463,7 +474,9 @@ export class AlchemyFinancialWallet implements FinancialWalletPort {
         state: "ESTIMATED",
         requiredWei: required.toString(),
         deficitWei: (required > balance ? required - balance : 0n).toString(),
-        reason: "OWNER_SETUP_ONLY_EXCLUDES_SESSION_AND_CANARY_GAS",
+        reason: sessionInstall
+          ? "OWNER_SETUP_ONLY_EXCLUDES_LIFECYCLE_AND_REVOCATION"
+          : "OWNER_SETUP_ONLY_EXCLUDES_SESSION_AND_CANARY_GAS",
       };
       // Exclude the SDK stub signature and any provider internals from the review response.
       unsignedUserOperation = {};
@@ -484,21 +497,19 @@ export class AlchemyFinancialWallet implements FinancialWalletPort {
       }
     } catch (error) {
       // No dummy estimate or EOA gas sum is substituted for a counterfactual UserOperation.
-      if (
-        error instanceof Error &&
-        /AA21|prefund|insufficient funds/i.test(error.message)
-      )
-        gas.reason = "INSUFFICIENT_ETH_FOR_ESTIMATION";
+      gas.reason = canaryGasFailureReason(error);
     }
     return {
+      role,
       wallet: wallet.address,
       chainId: 4663,
       escrow: escrow.address,
       token: CANONICAL_USDG,
-      maxPerTransaction: "10000",
-      maxPerDay: "10000",
+      maxPerTransaction: role === "buyer" ? "10000" : "0",
+      maxPerDay: role === "buyer" ? "10000" : "0",
       expiresAt: new Date(plan.expiry * 1000).toISOString(),
-      allowedActions: ["fund", "release"],
+      allowedActions:
+        role === "buyer" ? ["fund", "release"] : ["accept", "submit"],
       deployed: derived.deployed,
       usdgBalance: balances.usdg.units,
       ethBalanceWei: balances.eth.units,
@@ -509,12 +520,25 @@ export class AlchemyFinancialWallet implements FinancialWalletPort {
       unsignedUserOperation,
       sessionInstall,
       sessionPublicKey,
+      ownerRevocationCalls,
+      lifecycleGas: {
+        complete: false,
+        stages: (role === "buyer"
+          ? ["fundWithSession", "acceptResult", "revokeSession"]
+          : ["accept", "submitResult", "revokeSession"]
+        ).map((action) => ({
+          action,
+          requiredWei: null,
+          blocker: "INSTALLED_SESSION_AND_REAL_ESCROW_STATE_REQUIRED",
+        })),
+      },
       ...(trustedSignerRef ? { trustedSignerRef } : {}),
       sessionPolicy: {
         functions: sessionSelectors({
-          allowedActions: ["fund", "release"],
+          allowedActions:
+            role === "buyer" ? ["fund", "release"] : ["accept", "submit"],
         } as SpendingPolicy),
-        cumulativeAllowance: "10000",
+        cumulativeAllowance: role === "buyer" ? "10000" : "0",
         nativeTransferAllowance: "0",
         global: false,
         signerBinding: sessionInstall

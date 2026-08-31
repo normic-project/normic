@@ -28,7 +28,9 @@ export const financialInputs = {
   update_spending_policy: spendingPolicySchema,
   revoke_financial_session: company,
   prepare_financial_session: company,
-  prepare_canary_review: company,
+  prepare_canary_review: company.extend({
+    role: z.enum(["buyer", "provider"]).default("buyer"),
+  }),
   prepare_financial_identity: company,
   provision_financial_wallet: company,
   begin_financial_passkey_registration: company,
@@ -145,8 +147,10 @@ export async function runFinancialCommand(
         company.parse(raw).companyId,
         key,
       );
-    case "prepare_canary_review":
-      return f.prepareCanaryReview(a, company.parse(raw).companyId, key);
+    case "prepare_canary_review": {
+      const input = financialInputs.prepare_canary_review.parse(raw);
+      return f.prepareCanaryReview(a, input.companyId, key, input.role);
+    }
     case "prepare_financial_identity":
       return f.prepareFinancialIdentity(a, company.parse(raw).companyId, key);
     case "provision_financial_wallet":

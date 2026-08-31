@@ -9,6 +9,8 @@ import {
 
 type Review = Awaited<ReturnType<FinancialService["prepareCanaryReview"]>>;
 const blockers: Record<string, string> = {
+  DISTINCT_COUNTERPARTY_REQUIRED:
+    "A real wallet owned by a different company and owner is required.",
   DISTINCT_PROVIDER_AND_REAL_001_USDG_SERVICE_REQUIRED:
     "A different real owner must connect their agent, create their own Normic wallet and publish the agreed 0.01 USDG service.",
   BUYER_USDG_FUNDING_REQUIRED:
@@ -17,10 +19,14 @@ const blockers: Record<string, string> = {
     "A complete counterfactual UserOperation gas estimate is required. No gas amount is being guessed.",
   BUYER_ETH_FUNDING_REQUIRED:
     "The buyer needs ETH for the estimated owner setup. Later session/payment gas is additional.",
+  PROVIDER_ETH_FUNDING_REQUIRED:
+    "The provider needs ETH for its own deployment/session setup and subsequent actions.",
   OWNER_ALLOWANCE_REDUCTION_REQUIRED:
     "The existing escrow allowance exceeds 0.01 USDG. Reduce it independently before this canary; this review does not silently change it.",
   OWNER_SCOPED_SIGNER_PREPARATION_AND_PASSKEY_APPROVAL_REQUIRED:
     "The scoped session request and its gas must be ready before you personally approve with your existing passkey.",
+  COMPLETE_LIFECYCLE_GAS_UNVERIFIED:
+    "Later escrow actions and revocation still need complete UserOperation gas estimates. Do not treat the setup quote as total funding.",
 };
 
 export function CanaryReview({
@@ -33,6 +39,7 @@ export function CanaryReview({
   const [review, setReview] = useState<Review | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [role, setRole] = useState<"buyer" | "provider">("buyer");
   const key = useRef<string | null>(null),
     running = useRef(false);
   const prepare = async () => {
@@ -45,10 +52,11 @@ export function CanaryReview({
       const result = await walletRequest<Review>(
         await getOwnerToken(),
         "prepare_canary_review",
-        { companyId },
+        { companyId, role },
         key.current,
       );
       setReview(result);
+      key.current = null; // A new review refreshes expiry, balances and provider state.
     } catch (error) {
       if (error instanceof WalletRequestError && error.code === "CONFLICT")
         key.current = null;
@@ -73,10 +81,26 @@ export function CanaryReview({
         <h3>Review the first 0.01 USDG canary.</h3>
         <p>
           Prepare an unsigned request. This does not sign, deploy, approve
-          tokens or make a payment. A separate scoped Privy signer is prepared
-          only once a real provider and USDG funding are ready.
+          tokens or make a payment. This prepares or reuses your separate,
+          export-protected Privy session signer without giving it onchain
+          authority.
         </p>
       </div>
+      <label>
+        Your canary role
+        <select
+          value={role}
+          disabled={busy}
+          onChange={(event) => {
+            setRole(event.target.value as "buyer" | "provider");
+            setReview(null);
+            key.current = null;
+          }}
+        >
+          <option value="buyer">Buyer — fund + release</option>
+          <option value="provider">Provider — accept + submit</option>
+        </select>
+      </label>
       <button
         className="button"
         type="button"
@@ -98,7 +122,11 @@ export function CanaryReview({
             </div>
             <div>
               <dt>Owner limits</dt>
-              <dd>0.01 USDG per transaction · 0.01 USDG per day</dd>
+              <dd>
+                {review.role === "provider"
+                  ? "No USDG spending authority; no authority over buyer funds."
+                  : "0.01 USDG per transaction · 0.01 USDG per day"}
+              </dd>
             </div>
             <div>
               <dt>Session expiry</dt>
@@ -107,8 +135,11 @@ export function CanaryReview({
             <div>
               <dt>Agent actions</dt>
               <dd>
-                Fund + release only. No root, native ETH transfer, trading,
-                withdrawal or permission-management authority.
+                {review.role === "provider"
+                  ? "Accept + submit only."
+                  : "Fund + release only."}{" "}
+                No root, native ETH transfer, trading, withdrawal or
+                permission-management authority.
               </dd>
             </div>
             <div>

@@ -171,9 +171,25 @@ describe("financial WebAuthn enrollment and provisioning", () => {
     expect(review).not.toHaveProperty("trustedSignerRef");
     expect(canary).toHaveBeenCalledTimes(1);
     expect(canary).toHaveBeenCalledWith(
-      expect.objectContaining({ prepareSessionSigner: false }),
+      expect.objectContaining({ prepareSessionSigner: true, role: "buyer" }),
     );
     expect(await repo.getSession(companyId)).toBeNull();
+    expect(await repo.getPolicy(companyId)).toBeNull();
+    await expect(
+      service.prepareCanaryReview(owner, companyId, key, "provider"),
+    ).rejects.toThrow();
+    const providerReview = await service.prepareCanaryReview(
+      owner,
+      companyId,
+      crypto.randomUUID(),
+      "provider",
+    );
+    expect(providerReview.blockers).not.toContain(
+      "BUYER_USDG_FUNDING_REQUIRED",
+    );
+    expect(canary).toHaveBeenLastCalledWith(
+      expect.objectContaining({ role: "provider" }),
+    );
     expect(await repo.getPolicy(companyId)).toBeNull();
     await expect(
       service.prepareCanaryReview(

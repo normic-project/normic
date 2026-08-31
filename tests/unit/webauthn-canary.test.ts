@@ -4,6 +4,7 @@ import type * as Viem from "../../packages/payments/node_modules/viem";
 import { CANONICAL_USDG, escrowAbi } from "@normic/core";
 import {
   canaryOwnerCalls,
+  canaryGasFailureReason,
   canarySessionInstall,
   CANARY_ESCROW,
   CANARY_LIFECYCLE,
@@ -21,6 +22,21 @@ const {
 const wallet = `0x${"12".repeat(20)}` as const,
   signer = `0x${"34".repeat(20)}` as const;
 describe("unsigned WebAuthn first canary", () => {
+  it("reports only safe gas failure categories, never RPC credentials or payloads", () => {
+    const secret = "test-only-private-rpc-url-and-payload";
+    expect(
+      canaryGasFailureReason({ message: secret, cause: { status: 429 } }),
+    ).toBe("RPC_RATE_LIMITED");
+    expect(
+      canaryGasFailureReason({ name: "TimeoutError", message: secret }),
+    ).toBe("RPC_TIMEOUT");
+    expect(canaryGasFailureReason({ status: 401, message: secret })).toBe(
+      "RPC_AUTHENTICATION_FAILED",
+    );
+    expect(canaryGasFailureReason(new Error(secret))).toBe(
+      "OWNER_USEROP_ESTIMATE_UNAVAILABLE",
+    );
+  });
   it("encodes only the approved spending cap and exact bounded USDG approval", () => {
     const input = {
       allowance: 0n,
@@ -55,6 +71,10 @@ describe("unsigned WebAuthn first canary", () => {
     expect(() => canaryOwnerCalls({ ...input, chainId: 1 })).toThrow();
     expect(() => canaryOwnerCalls({ ...input, escrow: wallet })).toThrow();
     expect(canaryOwnerCalls(input)).toEqual(plan);
+    expect(canaryOwnerCalls({ ...input, role: "provider" })).toMatchObject({
+      calls: [],
+      approvalRequired: false,
+    });
   });
   it.each(["buyer", "provider"] as const)(
     "encodes a non-global %s session with exact selector, token, expiry and zero-native hooks",
@@ -118,6 +138,18 @@ describe("unsigned WebAuthn first canary", () => {
       ).toBe(0n);
       expect(plan.call.to).toBe(wallet);
       expect(plan.call.value).toBe("0x0");
+      expect(plan.revokeCall.to).toBe(wallet);
+      expect(plan.revokeCall.value).toBe("0x0");
+      expect(plan.revokeCall.data.slice(0, 10)).toBe(
+        toFunctionSelector("uninstallValidation(bytes24,bytes,bytes[])"),
+      );
+      const removal = decodeAbiParameters(
+        [{ type: "bytes24" }, { type: "bytes" }, { type: "bytes[]" }],
+        `0x${plan.revokeCall.data.slice(10)}`,
+      );
+      expect(removal[0].slice(-8)).toBe("00000001"); // never the root entity zero
+      expect(removal[2][1]).toBe(plan.hooks[0]!.initData);
+      expect(removal[2][3]).toBe(plan.hooks[1]!.initData);
       expect(plan.tokenAllowance).toBe(role === "buyer" ? "10000" : "0");
       expect(canarySessionInstall(input).call.data).toBe(plan.call.data);
       expect(() =>

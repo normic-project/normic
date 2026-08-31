@@ -297,6 +297,7 @@ export interface FinancialWalletPort {
     credential: FinancialWebAuthnCredential;
     preparedAt: number;
     prepareSessionSigner: boolean;
+    role?: "buyer" | "provider";
   }): Promise<CanaryOwnerPreparation>;
   provisionWebAuthnAccount(input: {
     credentialId: string;
@@ -339,14 +340,15 @@ export interface FinancialWalletPort {
   revoke(session: FinancialSession): Promise<void>;
 }
 export type CanaryOwnerPreparation = {
+  role: "buyer" | "provider";
   wallet: EvmAddress;
   chainId: 4663;
   escrow: EvmAddress;
   token: EvmAddress;
-  maxPerTransaction: "10000";
-  maxPerDay: "10000";
+  maxPerTransaction: "10000" | "0";
+  maxPerDay: "10000" | "0";
   expiresAt: string;
-  allowedActions: readonly ["fund", "release"];
+  allowedActions: readonly ["fund", "release"] | readonly ["accept", "submit"];
   deployed: boolean;
   usdgBalance: string;
   ethBalanceWei: string;
@@ -364,9 +366,14 @@ export type CanaryOwnerPreparation = {
   trustedSignerRef?: string;
   sessionInstall: SafeCall | null;
   sessionPublicKey: EvmAddress | null;
+  ownerRevocationCalls: SafeCall[];
+  lifecycleGas: {
+    complete: false;
+    stages: { action: string; requiredWei: null; blocker: string }[];
+  };
   sessionPolicy: {
     functions: string[];
-    cumulativeAllowance: "10000";
+    cumulativeAllowance: "10000" | "0";
     nativeTransferAllowance: "0";
     global: false;
     signerBinding:

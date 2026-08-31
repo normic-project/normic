@@ -1474,15 +1474,26 @@ export class FinancialService {
       },
     );
   }
-  async prepareCanaryReview(a: FinancialActor, companyId: string, key: string) {
+  async prepareCanaryReview(
+    a: FinancialActor,
+    companyId: string,
+    key: string,
+    role: "buyer" | "provider" = "buyer",
+  ) {
     if (a.kind !== "owner")
       throw new AuthorizationError("A verified owner must review the canary.");
     z.uuid().parse(companyId);
+    z.enum(["buyer", "provider"]).parse(role);
     const result = await this.mutate(
       a,
       "financial.canary_review_prepared",
       key,
-      { companyId, amount: "10000", durationSeconds: 3600 },
+      {
+        companyId,
+        role,
+        amount: role === "buyer" ? "10000" : "0",
+        durationSeconds: 3600,
+      },
       companyId,
       async (r) => {
         const company = await this.requireConnectedOwner(r, a, companyId);
@@ -1571,24 +1582,44 @@ export class FinancialService {
           wallet,
           credential,
           preparedAt: Math.floor(Date.now() / 1000),
-          prepareSessionSigner: providers.some((p) => p.serviceIds.length > 0),
+          prepareSessionSigner: true,
+          role,
         });
+        const serviceReady =
+          role === "buyer"
+            ? providers.some((p) => p.serviceIds.length > 0)
+            : (
+                await r.economy.listServices({ companyId, status: "active" })
+              ).some(
+                (s) =>
+                  s.agentId === wallet.agentId &&
+                  s.pricingModel === "fixed" &&
+                  s.quotedCurrency === "USDG" &&
+                  !!s.quotedPrice &&
+                  decimalToUnits(s.quotedPrice, 6) === "10000",
+              );
         const blockers = [
-          ...(!providers.some((p) => p.serviceIds.length)
+          ...(providers.length === 0 ? ["DISTINCT_COUNTERPARTY_REQUIRED"] : []),
+          ...(!serviceReady
             ? ["DISTINCT_PROVIDER_AND_REAL_001_USDG_SERVICE_REQUIRED"]
             : []),
-          ...(BigInt(prepared.usdgBalance) < 10000n
+          ...(role === "buyer" && BigInt(prepared.usdgBalance) < 10000n
             ? ["BUYER_USDG_FUNDING_REQUIRED"]
             : []),
           ...(prepared.gas.state !== "ESTIMATED"
             ? ["USEROP_GAS_ESTIMATE_REQUIRED"]
             : BigInt(prepared.gas.deficitWei ?? "0") > 0n
-              ? ["BUYER_ETH_FUNDING_REQUIRED"]
+              ? [
+                  role === "buyer"
+                    ? "BUYER_ETH_FUNDING_REQUIRED"
+                    : "PROVIDER_ETH_FUNDING_REQUIRED",
+                ]
               : []),
           ...(prepared.allowanceReductionRequired
             ? ["OWNER_ALLOWANCE_REDUCTION_REQUIRED"]
             : []),
           "OWNER_SCOPED_SIGNER_PREPARATION_AND_PASSKEY_APPROVAL_REQUIRED",
+          "COMPLETE_LIFECYCLE_GAS_UNVERIFIED",
         ];
         return {
           ...prepared,
@@ -1600,7 +1631,7 @@ export class FinancialService {
           signatureRequested: false,
           transactionsSent: 0,
           warning:
-            "Unsigned review only. No policy, session, approval, wallet deployment or payment has been activated. Gas excludes later session installation and payment lifecycle.",
+            "Unsigned review only. No policy, session, approval, wallet deployment or payment has been activated. The setup quote excludes later escrow actions and revocation.",
         };
       },
     );

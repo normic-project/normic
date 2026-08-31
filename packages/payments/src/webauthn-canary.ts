@@ -18,6 +18,7 @@ import {
   modularAccountAbi,
   serializeHookConfig,
   serializeValidationConfig,
+  serializeModuleEntity,
 } from "@account-kit/smart-contracts/experimental";
 import {
   CANONICAL_USDG,
@@ -31,6 +32,31 @@ import {
 export const CANARY_ESCROW =
   "0xda3ea8cd849ff916aa0ee6b1088f151c2fa51c47" as const;
 export const CANARY_UNITS = 10_000n;
+/** Only allowlisted diagnostic categories; never return provider messages or requests. */
+export function canaryGasFailureReason(error: unknown): string {
+  let current = error;
+  for (let depth = 0; current && depth < 8; depth++) {
+    if (typeof current !== "object") break;
+    const item = current as {
+      status?: unknown;
+      name?: unknown;
+      message?: unknown;
+      cause?: unknown;
+    };
+    if (item.status === 429) return "RPC_RATE_LIMITED";
+    if (item.status === 401 || item.status === 403)
+      return "RPC_AUTHENTICATION_FAILED";
+    if (typeof item.name === "string" && /timeout|abort/i.test(item.name))
+      return "RPC_TIMEOUT";
+    if (typeof item.message === "string") {
+      if (/AA21|prefund|insufficient funds/i.test(item.message))
+        return "INSUFFICIENT_ETH_FOR_ESTIMATION";
+      if (/timed out|timeout/i.test(item.message)) return "RPC_TIMEOUT";
+    }
+    current = item.cause;
+  }
+  return "OWNER_USEROP_ESTIMATE_UNAVAILABLE";
+}
 export const canaryChain = defineChain({
   id: 4663,
   name: "Robinhood Chain Mainnet",
@@ -48,6 +74,7 @@ export function canaryOwnerCalls(input: {
   preparedAt: number;
   escrow: EvmAddress;
   chainId: number;
+  role?: "buyer" | "provider";
 }) {
   if (
     input.chainId !== 4663 ||
@@ -58,6 +85,13 @@ export function canaryOwnerCalls(input: {
   )
     throw new PolicyDeniedError("Invalid canary preparation.");
   const expiry = input.preparedAt + 3600;
+  if (input.role === "provider")
+    return {
+      calls: [] as SafeCall[],
+      expiry,
+      approvalRequired: false,
+      allowanceReductionRequired: false,
+    };
   const calls: SafeCall[] = [
     {
       to: CANARY_ESCROW,
@@ -214,6 +248,26 @@ export function canarySessionInstall(input: {
   });
   return {
     call: { to: wallet, data, value: "0x0" } as SafeCall,
+    revokeCall: {
+      to: wallet,
+      value: "0x0",
+      data: encodeFunctionData({
+        abi: modularAccountAbi,
+        functionName: "uninstallValidation",
+        args: [
+          serializeModuleEntity(validationConfig),
+          SingleSignerValidationModule.encodeOnUninstallData({ entityId }),
+          // MAv2 uninstalls validation hooks first, then execution hooks; its
+          // linked-list sets enumerate each group in reverse installation order.
+          [
+            TimeRangeModule.encodeOnUninstallData({ entityId }),
+            hooks[0]!.initData,
+            NativeTokenLimitModule.encodeOnUninstallData({ entityId }),
+            hooks[1]!.initData,
+          ],
+        ],
+      }),
+    } as SafeCall,
     validationConfig,
     hooks,
     selectors,

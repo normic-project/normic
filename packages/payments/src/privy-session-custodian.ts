@@ -1,5 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import { PrivyClient } from "@privy-io/node";
+import type {
+  Policy,
+  PolicyCreateParams,
+  Wallet,
+} from "@privy-io/node/resources";
 import { createViemAccount } from "@privy-io/node/viem";
 import { keccak256, recoverAddress, toHex, type Hex } from "viem";
 import {
@@ -38,8 +43,52 @@ export interface PrivySessionSignerTransport {
   personalSign(wallet: PrivyWalletRecord, payload: Hex): Promise<Hex>;
 }
 
-class PrivySdkSessionSignerTransport implements PrivySessionSignerTransport {
-  constructor(private readonly client: PrivyClient) {}
+export const privySessionRules: PolicyCreateParams["rules"] = [
+  {
+    name: "Deny private key export",
+    method: "exportPrivateKey",
+    action: "DENY",
+    conditions: [],
+  },
+  {
+    name: "Deny seed export",
+    method: "exportSeedPhrase",
+    action: "DENY",
+    conditions: [],
+  },
+  {
+    name: "Opaque MAv2 session signing only",
+    method: "personal_sign",
+    action: "ALLOW",
+    conditions: [],
+  },
+];
+export function assertPrivySessionPolicy(
+  policy: Pick<Policy, "chain_type" | "version" | "rules">,
+) {
+  if (
+    policy.chain_type !== "ethereum" ||
+    policy.version !== "1.0" ||
+    policy.rules.length !== privySessionRules.length ||
+    !privySessionRules.every((expected) =>
+      policy.rules.some(
+        (rule) =>
+          rule.method === expected.method &&
+          rule.action === expected.action &&
+          rule.conditions.length === 0,
+      ),
+    )
+  )
+    throw new PolicyDeniedError(
+      "The session signer export/signing policy is invalid.",
+    );
+}
+
+export class PrivySdkSessionSignerTransport implements PrivySessionSignerTransport {
+  constructor(
+    private readonly client: PrivyClient,
+    private readonly allowSignerCreation = true,
+  ) {}
 
   private record(wallet: {
     id: string;
@@ -60,18 +109,60 @@ class PrivySdkSessionSignerTransport implements PrivySessionSignerTransport {
   }
 
   async createWallet(input: { idempotencyKey: string; externalId: string }) {
-    return this.record(
-      await this.client.wallets().create({
-        chain_type: "ethereum",
-        display_name: "Normic USDG session signer",
-        external_id: input.externalId,
-        idempotency_key: input.idempotencyKey,
-      }),
+    // Provider idempotency expires after 24 hours. The immutable external ID is
+    // the durable company binding; never create a replacement on a lookup error.
+    const matches: Wallet[] = [];
+    for await (const wallet of this.client
+      .wallets()
+      .list({ external_id: input.externalId, include_archived: true }))
+      matches.push(wallet);
+    if (matches.length > 1) throw new Error("Ambiguous session signer binding");
+    if (matches[0]) {
+      if (matches[0].external_id !== input.externalId)
+        throw new Error("Session signer binding mismatch");
+      await this.validatePolicy(matches[0]);
+      return this.record(matches[0]);
+    }
+    if (!this.allowSignerCreation)
+      throw new Error("Session signer preparation required");
+    const policy = await this.client.policies().create({
+      name: "Normic scoped session custody",
+      chain_type: "ethereum",
+      version: "1.0",
+      rules: privySessionRules,
+      idempotency_key: `${input.idempotencyKey}-policy`,
+    });
+    assertPrivySessionPolicy(policy);
+    const wallet = await this.client.wallets().create({
+      chain_type: "ethereum",
+      display_name: "Normic USDG session signer",
+      external_id: input.externalId,
+      idempotency_key: input.idempotencyKey,
+      policy_ids: [policy.id],
+    });
+    // Verify the persisted binding, not just the submitted request.
+    const stored = await this.client.wallets().get(wallet.id);
+    if (
+      stored.external_id !== input.externalId ||
+      stored.address !== wallet.address
+    )
+      throw new Error("Session signer binding mismatch");
+    await this.validatePolicy(stored);
+    return this.record(stored);
+  }
+
+  private async validatePolicy(wallet: Wallet) {
+    if (wallet.policy_ids.length !== 1 || wallet.owner_id !== null)
+      throw new Error("Invalid session custody policy");
+    assertPrivySessionPolicy(
+      await this.client.policies().get(wallet.policy_ids[0]!),
     );
   }
 
   async getWallet(walletId: string) {
-    return this.record(await this.client.wallets().get(walletId));
+    const wallet = await this.client.wallets().get(walletId);
+    await this.validatePolicy(wallet);
+    return this.record(wallet);
   }
 
   async personalSign(wallet: PrivyWalletRecord, payload: Hex) {
@@ -315,6 +406,7 @@ export class PrivySessionCustodian implements SessionCustodian {
 
 export function createPrivySessionCustodianFromEnvironment(
   env: Record<string, string | undefined>,
+  options: { allowSignerCreation?: boolean } = {},
 ) {
   if (env.NORMIC_CUSTODY_PROVIDER !== "privy") return undefined;
   const appId = env.PRIVY_APP_ID?.trim(),
@@ -323,6 +415,9 @@ export function createPrivySessionCustodianFromEnvironment(
   if (!appId || !appSecret || credentialRef !== `privy-app:${appId}`)
     return undefined;
   return new PrivySessionCustodian(
-    new PrivySdkSessionSignerTransport(new PrivyClient({ appId, appSecret })),
+    new PrivySdkSessionSignerTransport(
+      new PrivyClient({ appId, appSecret }),
+      options.allowSignerCreation ?? true,
+    ),
   );
 }
