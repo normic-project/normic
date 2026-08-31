@@ -373,6 +373,219 @@ export class FinancialService {
     await this.authorize(this.repository, a, companyId);
     return this.repository.getWallet(companyId);
   }
+  private async requireWalletAgent(r: FinancialRepository, a: FinancialActor) {
+    if (a.kind !== "agent")
+      throw new AuthorizationError("An authenticated MCP agent is required.");
+    await this.authorize(r, a);
+    const p = a.context.principal;
+    const agent = await r.economy.getAgent(p.agentId);
+    const company = agent ? await r.economy.getCompany(agent.companyId) : null;
+    const owner = company ? await r.economy.getUser(company.ownerUserId) : null;
+    const credential = await r.economy.getCredential(p.credentialId);
+    if (
+      !agent ||
+      !company ||
+      !owner?.authSubject ||
+      !owner.authIssuer ||
+      company.primaryAgentId !== agent.id ||
+      company.ownerUserId !== p.userId ||
+      agent.userId !== owner.id ||
+      owner.authIssuer !== p.issuer ||
+      !credential ||
+      credential.audience !== p.audience ||
+      !(await r.economy.hasDynamicOAuthGrant({
+        audience: credential.audience,
+        ownerSubject: owner.authSubject,
+        agentId: agent.id,
+        credentialId: credential.id,
+      }))
+    )
+      throw new AuthorizationError(
+        "A connected agent with a trusted owner grant is required.",
+      );
+    return { company, agent, credential };
+  }
+  async prepareWallet(a: FinancialActor, requestId: string) {
+    // A UUID is an idempotency handle, not an owner authorization or passkey challenge.
+    z.uuid().parse(requestId);
+    const { company, agent, credential } = await this.requireWalletAgent(
+      this.repository,
+      a,
+    );
+    const wallet = await this.getWallet(a, company.id);
+    if (wallet)
+      return {
+        state: "READY",
+        companyId: company.id,
+        chainId: wallet.chainId,
+        address: wallet.address,
+        deployed: wallet.deployed,
+      };
+    const approval = await this.mutate(
+      a,
+      "financial.wallet_owner_approval_requested",
+      requestId,
+      { companyId: company.id, credentialId: credential.id },
+      company.id,
+      async (r) => {
+        await this.requireWalletAgent(r, a);
+        await this.reserveFinancialRoot(r, company.id, company.ownerUserId);
+        return {
+          companyId: company.id,
+          agentId: agent.id,
+          credentialId: credential.id,
+          ownerUserId: company.ownerUserId,
+          expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+        };
+      },
+    );
+    if (Date.parse(approval.expiresAt) <= Date.now())
+      throw new DomainError(
+        "Ask your agent for a new wallet approval link.",
+        "WALLET_APPROVAL_EXPIRED",
+      );
+    const url = new URL("/wallet", FINANCIAL_WEBAUTHN_ORIGIN);
+    url.searchParams.set("approval", requestId);
+    url.searchParams.set("agent", agent.id);
+    return {
+      state: "OWNER_APPROVAL_REQUIRED",
+      companyId: company.id,
+      chainId: 4663,
+      approvalUrl: url.href,
+      expiresAt: approval.expiresAt,
+      ownerPasskeyRequired: true,
+    };
+  }
+  async getAgentWallet(a: FinancialActor, companyId?: string) {
+    const { company } = await this.requireWalletAgent(this.repository, a);
+    if (companyId !== undefined && z.uuid().parse(companyId) !== company.id)
+      throw new AuthorizationError("The wallet belongs to another company.");
+    const wallet = await this.getWallet(a, company.id);
+    return wallet
+      ? {
+          state: "READY",
+          companyId: company.id,
+          chainId: wallet.chainId,
+          address: wallet.address,
+          deployed: wallet.deployed,
+        }
+      : {
+          state: "NOT_CREATED",
+          companyId: company.id,
+          chainId: 4663,
+          address: null,
+        };
+  }
+  async getWalletOwnerApproval(
+    a: FinancialActor,
+    companyId: string,
+    agentId: string,
+    requestId: string,
+  ) {
+    if (a.kind !== "owner")
+      throw new AuthorizationError(
+        "A verified owner must review wallet preparation.",
+      );
+    z.uuid().parse(companyId);
+    z.uuid().parse(agentId);
+    z.uuid().parse(requestId);
+    await this.authorize(this.repository, a, companyId);
+    const approval = await this.repository.getWalletOwnerApproval(
+      agentId,
+      requestId,
+    );
+    const company = await this.repository.economy.getCompany(companyId);
+    if (
+      !approval ||
+      approval.companyId !== companyId ||
+      approval.agentId !== agentId ||
+      approval.ownerUserId !== company?.ownerUserId
+    )
+      throw new AuthorizationError(
+        "This wallet request does not belong to this owner and company.",
+      );
+    if (
+      Date.parse(approval.expiresAt) <= Date.now() ||
+      !Number.isFinite(Date.parse(approval.expiresAt))
+    )
+      throw new DomainError(
+        "Ask your agent for a new wallet approval link.",
+        "WALLET_APPROVAL_EXPIRED",
+      );
+    const credential = await this.repository.economy.getCredential(
+      approval.credentialId,
+    );
+    if (
+      !credential ||
+      credential.agentId !== agentId ||
+      credential.revokedAt ||
+      (credential.expiresAt && credential.expiresAt <= new Date())
+    )
+      throw new AuthorizationError(
+        "The requesting MCP credential is no longer active.",
+      );
+    await this.requireWalletAgent(this.repository, {
+      kind: "agent",
+      context: {
+        principal: {
+          agentId,
+          userId: approval.ownerUserId,
+          credentialId: credential.id,
+          scopes: credential.scopes,
+          issuer: a.owner.issuer,
+          audience: credential.audience,
+          expiresAt: credential.expiresAt,
+        },
+      },
+    });
+    return {
+      companyId,
+      state: "OWNER_APPROVAL_REQUIRED",
+      expiresAt: approval.expiresAt,
+    };
+  }
+  private async reserveFinancialRoot(
+    r: FinancialRepository,
+    companyId: string,
+    ownerUserId: string,
+  ) {
+    let binding = await r.getRootBinding(companyId);
+    if (binding) {
+      if (
+        binding.ownerUserId !== ownerUserId ||
+        binding.rootType !== "webauthn-mav2" ||
+        binding.chainId !== 4663 ||
+        binding.status === "revoked"
+      )
+        throw new ConflictError(
+          "The existing financial root binding is invalid or disabled.",
+        );
+    } else {
+      const now = new Date().toISOString();
+      binding = {
+        id: randomUUID(),
+        companyId,
+        ownerUserId,
+        chainId: 4663,
+        rootType: "webauthn-mav2",
+        status: "pending_passkey",
+        rootIdentity: null,
+        smartAccountAddress: null,
+        accountSalt: "0",
+        createdAt: now,
+        updatedAt: now,
+      };
+      await r.saveRootBinding(binding);
+    }
+    return {
+      companyId,
+      chainId: binding.chainId,
+      rootType: binding.rootType,
+      state: binding.status,
+      passkeyEnrollmentRequired: binding.status === "pending_passkey",
+      smartAccountAddress: binding.smartAccountAddress,
+    };
+  }
   async getFinancialIdentity(a: FinancialActor, companyId: string) {
     z.uuid().parse(companyId);
     await this.authorize(this.repository, a, companyId);
@@ -440,48 +653,7 @@ export class FinancialService {
           throw new PolicyDeniedError(
             "A real authenticated MCP connection is required before financial identity initialization.",
           );
-        const existing = await r.getRootBinding(companyId);
-        if (existing) {
-          if (
-            existing.ownerUserId !== company.ownerUserId ||
-            existing.rootType !== "webauthn-mav2" ||
-            existing.chainId !== 4663
-          )
-            throw new ConflictError(
-              "The existing financial root binding is invalid.",
-            );
-          return {
-            companyId,
-            chainId: existing.chainId,
-            rootType: existing.rootType,
-            state: existing.status,
-            passkeyEnrollmentRequired: existing.status === "pending_passkey",
-            smartAccountAddress: existing.smartAccountAddress,
-          };
-        }
-        const now = new Date().toISOString(),
-          binding: FinancialRootBinding = {
-            id: randomUUID(),
-            companyId,
-            ownerUserId: company.ownerUserId,
-            chainId: 4663,
-            rootType: "webauthn-mav2",
-            status: "pending_passkey",
-            rootIdentity: null,
-            smartAccountAddress: null,
-            accountSalt: "0",
-            createdAt: now,
-            updatedAt: now,
-          };
-        await r.saveRootBinding(binding);
-        return {
-          companyId,
-          chainId: binding.chainId,
-          rootType: binding.rootType,
-          state: binding.status,
-          passkeyEnrollmentRequired: true,
-          smartAccountAddress: null,
-        };
+        return this.reserveFinancialRoot(r, companyId, company.ownerUserId);
       },
     );
   }

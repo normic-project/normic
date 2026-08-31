@@ -23,6 +23,7 @@ import {
 import { ownerRequestHeaders } from "@/lib/owner-request";
 import {
   loadFinancialWallet,
+  reviewWalletApproval,
   walletRequest,
   WalletRequestError,
   type WalletIdentityState,
@@ -84,6 +85,7 @@ export function NormicWallet() {
   const [wallet, setWallet] = useState<FinancialWallet | null>(null);
   const [identity, setIdentity] = useState<WalletIdentityState | null>(null);
   const [message, setMessage] = useState("");
+  const [approvalBlocked, setApprovalBlocked] = useState(false);
   const [registrationPending, setRegistrationPending] = useState(false);
   const generation = useRef(0),
     inFlight = useRef(false),
@@ -105,6 +107,25 @@ export function NormicWallet() {
     if (version !== generation.current) return;
     setIdentity(result.identity);
     setWallet(result.wallet);
+    if (!result.wallet) {
+      try {
+        const approval = await reviewWalletApproval(current.token, id);
+        if (version !== generation.current) return;
+        setApprovalBlocked(false);
+        if (approval)
+          setMessage(
+            "Your agent requested wallet preparation. Only you can approve it by creating your passkey. No spending permission is granted.",
+          );
+      } catch (error) {
+        if (version !== generation.current) return;
+        setApprovalBlocked(true);
+        setMessage(
+          error instanceof WalletRequestError
+            ? error.message
+            : "This wallet request could not be verified. Ask your agent for a new link.",
+        );
+      }
+    }
     if (result.wallet || result.identity.state !== "pending_passkey") {
       pending.current = null;
       setRegistrationPending(false);
@@ -227,6 +248,9 @@ export function NormicWallet() {
         setWallet(current.wallet);
         return;
       }
+      // Recheck expiry, owner/company binding and live credential/grant before enrollment.
+      await reviewWalletApproval(token, companyId);
+      unchanged();
       if (current.identity.state !== "passkey_verified") {
         if (!browserSupportsWebAuthn() || !window.isSecureContext)
           throw new Error("PASSKEY_UNSUPPORTED");
@@ -328,9 +352,19 @@ export function NormicWallet() {
       {!ready ? (
         <p role="status">Checking your account…</p>
       ) : !owner ? (
-        <Link className="button" href="/owner">
-          Sign in to Normic
-        </Link>
+        <>
+          <Link
+            className="button"
+            href="/owner"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Sign in to Normic (new tab)
+          </Link>
+          <p>
+            After signing in, return to this tab to review your wallet request.
+          </p>
+        </>
       ) : wallet && connection?.identity ? (
         <WalletDetails
           wallet={wallet}
@@ -354,7 +388,7 @@ export function NormicWallet() {
           <button
             className="button"
             type="button"
-            disabled={busy || !identity}
+            disabled={busy || !identity || approvalBlocked}
             onClick={() => void create()}
           >
             {busy

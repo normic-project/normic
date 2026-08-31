@@ -84,6 +84,37 @@ describe("direct WebAuthn financial root groundwork", () => {
     ).toBe("ready");
     await runtime.repository.touchCredential(credential.id, new Date());
 
+    const agentActor: FinancialActor = {
+      kind: "agent",
+      context: {
+        principal: {
+          ...identity.context.principal,
+          credentialId: credential.id,
+        },
+      },
+    };
+    const requestId = crypto.randomUUID();
+    const prepared = await service.prepareWallet(agentActor, requestId);
+    expect(prepared).toMatchObject({
+      state: "OWNER_APPROVAL_REQUIRED",
+      companyId: identity.companyId,
+      chainId: 4663,
+    });
+    expect(new URL(prepared.approvalUrl!).origin).toBe("https://normic.tech");
+    expect(await service.prepareWallet(agentActor, requestId)).toEqual(
+      prepared,
+    );
+    expect(JSON.stringify(prepared)).not.toContain(credential.id);
+    expect(JSON.stringify(prepared)).not.toMatch(/challenge|secret|publicKey/);
+    await expect(
+      service.getWalletOwnerApproval(
+        owner,
+        identity.companyId,
+        identity.agentId,
+        requestId,
+      ),
+    ).resolves.toMatchObject({ state: "OWNER_APPROVAL_REQUIRED" });
+
     const first = await runFinancialCommand(
       service,
       owner,

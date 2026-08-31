@@ -334,6 +334,14 @@ export interface FinancialWalletPort {
 }
 export type FinanceClaim =
   { replay: false } | { replay: true; response: unknown };
+// Stored in the existing transactional idempotency journal, never a bearer grant.
+export type WalletOwnerApproval = {
+  companyId: string;
+  agentId: string;
+  credentialId: string;
+  ownerUserId: string;
+  expiresAt: string;
+};
 export interface FinancialRepository {
   readonly economy: EconomyRepository;
   transaction<T>(
@@ -341,6 +349,10 @@ export interface FinancialRepository {
   ): Promise<T>;
   lockCompany(companyId: string): Promise<void>;
   lockIndexer(): Promise<void>;
+  getWalletOwnerApproval(
+    agentId: string,
+    requestId: string,
+  ): Promise<WalletOwnerApproval | null>;
   getRootBinding(companyId: string): Promise<FinancialRootBinding | null>;
   getRootBindingById(id: string): Promise<FinancialRootBinding | null>;
   saveRootBinding(binding: FinancialRootBinding): Promise<void>;

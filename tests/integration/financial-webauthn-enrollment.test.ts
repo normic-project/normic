@@ -141,6 +141,142 @@ describe("financial WebAuthn enrollment and provisioning", () => {
     return { passkey, response, key };
   };
 
+  it("agent preparation requires owner WebAuthn and returns the same wallet after owner completion", async () => {
+    const actor: FinancialActor = {
+      kind: "agent",
+      context: {
+        principal: {
+          ...agent.context.principal,
+          credentialId,
+          scopes: ["company:read"],
+        },
+      },
+    };
+    const requestId = crypto.randomUUID();
+    const prepared = await service.prepareWallet(actor, requestId);
+    expect(prepared.state).toBe("OWNER_APPROVAL_REQUIRED");
+    expect(provision).not.toHaveBeenCalled();
+    await expect(
+      service.beginPasskeyRegistration(
+        actor,
+        companyId,
+        "primary",
+        crypto.randomUUID(),
+      ),
+    ).rejects.toThrow("verified owner");
+    await expect(
+      service.provisionFinancialWallet(actor, companyId, crypto.randomUUID()),
+    ).rejects.toThrow();
+    await expect(
+      service.getWalletOwnerApproval(
+        actor,
+        companyId,
+        agent.agentId,
+        requestId,
+      ),
+    ).rejects.toThrow("verified owner");
+    expect(await service.getWallet(actor, companyId)).toBeNull();
+    await finish();
+    const wallet = await service.provisionFinancialWallet(
+      owner,
+      companyId,
+      crypto.randomUUID(),
+    );
+    expect(await service.prepareWallet(actor, requestId)).toMatchObject({
+      state: "READY",
+      address: wallet.address,
+    });
+    expect(
+      await service.prepareWallet(actor, crypto.randomUUID()),
+    ).toMatchObject({ state: "READY", address: wallet.address });
+    expect((await service.getWallet(actor, companyId))?.address).toBe(
+      wallet.address,
+    );
+    expect(await service.getAgentWallet(actor)).toMatchObject({
+      state: "READY",
+      address: wallet.address,
+    });
+    await expect(
+      service.getAgentWallet(actor, crypto.randomUUID()),
+    ).rejects.toThrow("another company");
+    expect(provision).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed for expired requests, wrong owners, missing scopes and revoked grants", async () => {
+    const actor: FinancialActor = {
+      kind: "agent",
+      context: { principal: { ...agent.context.principal, credentialId } },
+    };
+    const requestId = crypto.randomUUID();
+    await service.prepareWallet(actor, requestId);
+    await expect(
+      service.getWalletOwnerApproval(
+        owner,
+        companyId,
+        crypto.randomUUID(),
+        requestId,
+      ),
+    ).rejects.toThrow("does not belong");
+    await expect(
+      service.getWalletOwnerApproval(
+        owner,
+        companyId,
+        agent.agentId,
+        crypto.randomUUID(),
+      ),
+    ).rejects.toThrow("does not belong");
+    await expect(
+      service.getWalletOwnerApproval(
+        {
+          kind: "owner",
+          owner: { ...owner.owner, subject: crypto.randomUUID() },
+        },
+        companyId,
+        agent.agentId,
+        requestId,
+      ),
+    ).rejects.toThrow();
+    await expect(
+      service.prepareWallet(
+        {
+          kind: "agent",
+          context: { principal: { ...actor.context.principal, scopes: [] } },
+        },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toThrow();
+    const now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now + 11 * 60_000);
+    await expect(
+      service.getWalletOwnerApproval(
+        owner,
+        companyId,
+        agent.agentId,
+        requestId,
+      ),
+    ).rejects.toMatchObject({ code: "WALLET_APPROVAL_EXPIRED" });
+    await expect(service.prepareWallet(actor, requestId)).rejects.toMatchObject(
+      { code: "WALLET_APPROVAL_EXPIRED" },
+    );
+    vi.restoreAllMocks();
+    await rt.database.query(
+      "UPDATE normic_oauth_agent_grants SET revoked_at=now() WHERE credential_id=$1",
+      [credentialId],
+    );
+    await expect(
+      service.prepareWallet(actor, crypto.randomUUID()),
+    ).rejects.toThrow("trusted owner grant");
+    await expect(
+      service.getWalletOwnerApproval(
+        owner,
+        companyId,
+        agent.agentId,
+        requestId,
+      ),
+    ).rejects.toThrow("trusted owner grant");
+    expect(provision).not.toHaveBeenCalled();
+  });
+
   it("uses production RP/origin, hashes challenges everywhere, and binds one immutable wallet idempotently", async () => {
     const options = await begin();
     expect(options).toMatchObject({

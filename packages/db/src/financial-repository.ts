@@ -17,6 +17,7 @@ import {
   type VerifiedEscrowEvent,
   type FinancialSummary,
   type FinanceClaim,
+  type WalletOwnerApproval,
 } from "@normic/core";
 import { PostgresEconomyRepository } from "./repository.js";
 import type { RuntimeDatabase, SqlExecutor, SqlParameter } from "./database.js";
@@ -49,6 +50,12 @@ export class PostgresFinancialRepository implements FinancialRepository {
     return this.data<FinancialRootBinding>(
       "SELECT data FROM financial_root_bindings WHERE company_id=$1",
       [companyId],
+    );
+  }
+  getWalletOwnerApproval(agentId: string, requestId: string) {
+    return this.data<WalletOwnerApproval>(
+      "SELECT response AS data FROM financial_idempotency WHERE actor=$1 AND operation='financial.wallet_owner_approval_requested' AND key=$2 AND response IS NOT NULL",
+      [`agent:${agentId}`, requestId],
     );
   }
   getRootBindingById(id: string) {

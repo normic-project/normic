@@ -1,5 +1,13 @@
 import { createRequire } from "node:module";
-import { OAuthAgentAuthenticator, OAuthTokenVerifier } from "@normic/core";
+import type * as McpProtocol from "../../apps/mcp/node_modules/@modelcontextprotocol/server";
+import {
+  FinancialService,
+  OAuthAgentAuthenticator,
+  OAuthTokenVerifier,
+  type FinancialChainPort,
+  type FinancialWalletPort,
+} from "@normic/core";
+import { PostgresFinancialRepository } from "@normic/db";
 import { RobinhoodMarketDataProvider } from "@normic/markets";
 import { afterEach, describe, expect, it } from "vitest";
 import { createNormicMcpHandler } from "../../apps/mcp/src/tools.js";
@@ -11,15 +19,12 @@ import {
   TEST_ISSUER,
 } from "../support/runtime.js";
 
-type AuthInfo =
-  import("../../apps/mcp/node_modules/@modelcontextprotocol/server").AuthInfo;
+type AuthInfo = McpProtocol.AuthInfo;
 const requireFromMcp = createRequire(
   new URL("../../apps/mcp/package.json", import.meta.url),
 );
 const { getOAuthProtectedResourceMetadataUrl, requireBearerAuth } =
-  requireFromMcp(
-    "@modelcontextprotocol/server",
-  ) as typeof import("../../apps/mcp/node_modules/@modelcontextprotocol/server");
+  requireFromMcp("@modelcontextprotocol/server") as typeof McpProtocol;
 
 describe("production-shaped MCP OAuth access", () => {
   let closeRuntime: (() => Promise<void>) | undefined;
@@ -134,6 +139,23 @@ describe("production-shaped MCP OAuth access", () => {
     const handler = createNormicMcpHandler(
       runtime.economy,
       new RobinhoodMarketDataProvider({ enabled: false }),
+      new FinancialService(
+        new PostgresFinancialRepository(runtime.database),
+        {
+          capabilities: () => ({
+            state: "blocked",
+            missing: ["test execution disabled"],
+            autonomousExecution: false,
+          }),
+        } as FinancialChainPort,
+        {} as FinancialWalletPort,
+        {
+          origin: "https://normic.tech",
+          acceptTimeoutSeconds: 60,
+          completionTimeoutSeconds: 60,
+          reviewWindowSeconds: 60,
+        },
+      ),
     );
     closeHandler = () => handler.close();
     const call = (body: Record<string, unknown>) =>
@@ -169,6 +191,42 @@ describe("production-shaped MCP OAuth access", () => {
       params: {},
     });
     expect(tools.status).toBe(200);
-    expect(await tools.text()).toContain('"normic_get_identity"');
+    const listed = await tools.text();
+    expect(listed).toContain('"normic_get_identity"');
+    expect(listed).toContain('"normic_prepare_wallet"');
+    expect(listed).toContain('"normic_get_wallet"');
+    expect(listed).not.toContain(
+      '"normic_begin_financial_passkey_registration"',
+    );
+    expect(listed).not.toContain('"normic_get_wallet_owner_approval"');
+    const requestId = crypto.randomUUID();
+    const preparation = await call({
+      jsonrpc: "2.0",
+      id: 3,
+      method: "tools/call",
+      params: {
+        name: "normic_prepare_wallet",
+        arguments: { idempotencyKey: requestId },
+      },
+    });
+    const prepared = await preparation.text();
+    expect(preparation.status).toBe(200);
+    expect(prepared).toContain("OWNER_APPROVAL_REQUIRED");
+    expect(prepared).toContain("https://normic.tech/wallet?");
+    expect(prepared).not.toContain(credential.id);
+    expect(prepared).not.toContain("challenge");
+    const read = await call({
+      jsonrpc: "2.0",
+      id: 4,
+      method: "tools/call",
+      params: {
+        name: "normic_get_wallet",
+        arguments: {},
+      },
+    });
+    expect(read.status).toBe(200);
+    const queried = await read.text();
+    expect(queried).not.toContain('"isError":true');
+    expect(queried).toContain("NOT_CREATED");
   });
 });

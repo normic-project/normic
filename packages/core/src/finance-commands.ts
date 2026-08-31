@@ -16,6 +16,11 @@ export const financialInputs = {
   get_financial_capabilities: z.object({}).strict(),
   get_financial_identity: company,
   get_wallet: company,
+  prepare_wallet: z.object({}).strict(),
+  get_wallet_owner_approval: company.extend({
+    agentId: z.uuid(),
+    requestId: z.uuid(),
+  }),
   get_balance: company,
   get_spending_policy: company,
   get_financial_summary: company,
@@ -110,6 +115,13 @@ export async function runFinancialCommand(
       return f.getFinancialIdentity(a, company.parse(raw).companyId);
     case "get_wallet":
       return f.getWallet(a, company.parse(raw).companyId);
+    case "prepare_wallet":
+      financialInputs.prepare_wallet.parse(raw);
+      return f.prepareWallet(a, key);
+    case "get_wallet_owner_approval": {
+      const p = financialInputs.get_wallet_owner_approval.parse(raw);
+      return f.getWalletOwnerApproval(a, p.companyId, p.agentId, p.requestId);
+    }
     case "get_balance":
       return f.getBalance(a, company.parse(raw).companyId);
     case "get_spending_policy":

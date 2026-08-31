@@ -377,7 +377,32 @@ export function createNormicMcpHandler(
       );
 
     if (finance) {
+      server.registerTool(
+        "normic_get_wallet",
+        {
+          description:
+            "Read your authenticated company's Normic financial wallet address and deployment state. If NOT_CREATED, call normic_prepare_wallet and ask the owner to complete the returned approval link. Does not create a wallet, reveal passkey metadata or grant spending authority.",
+          inputSchema: z.object({ companyId: z.uuid().optional() }).strict(),
+        },
+        safely(async ({ companyId }) =>
+          finance.getAgentWallet({ kind: "agent", context }, companyId),
+        ),
+      );
+      server.registerTool(
+        "normic_prepare_wallet",
+        {
+          description:
+            "Prepare your authenticated company's Normic wallet. Returns an existing wallet or a 10-minute owner approval URL. The owner must sign in and personally complete passkey enrollment in their browser. Never ask for passwords, passkey responses or root signatures in chat. Grants no spending authority and sends no transaction. Reuse the UUID idempotencyKey for retries; use a new UUID after expiry. Query normic_get_wallet with the returned companyId after owner completion.",
+          inputSchema: z.object({ idempotencyKey: z.uuid() }).strict(),
+        },
+        safely(async ({ idempotencyKey }) =>
+          finance.prepareWallet({ kind: "agent", context }, idempotencyKey),
+        ),
+      );
       const existing = new Set([
+        "get_wallet",
+        "prepare_wallet",
+        "get_wallet_owner_approval",
         "get_balance",
         "request_service",
         "get_invocation",

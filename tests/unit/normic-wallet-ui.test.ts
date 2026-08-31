@@ -46,7 +46,10 @@ let state: string,
   storedWallet: unknown,
   requests: { command: string; headers: Headers; body: unknown }[],
   failProvision: boolean;
+let approvalExpired: boolean;
 beforeEach(() => {
+  window.history.replaceState({}, "", "/wallet");
+  approvalExpired = false;
   vi.resetAllMocks();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("isSecureContext", true);
@@ -92,6 +95,16 @@ beforeEach(() => {
         body: JSON.parse(String(init?.body)),
       });
       if (command === "get_wallet") return Response.json(storedWallet);
+      if (command === "get_wallet_owner_approval")
+        return approvalExpired
+          ? Response.json(
+              { error: { code: "WALLET_APPROVAL_EXPIRED" } },
+              { status: 400 },
+            )
+          : Response.json({
+              companyId,
+              expiresAt: new Date(Date.now() + 600_000).toISOString(),
+            });
       if (command === "get_financial_identity")
         return Response.json({
           state,
@@ -148,6 +161,64 @@ const click = () =>
     container.querySelector("button")!.click();
   });
 describe("Create Normic Wallet", () => {
+  it("preserves an approval link while the owner signs in in a separate tab", async () => {
+    const path = `/wallet?approval=${crypto.randomUUID()}&agent=${crypto.randomUUID()}`;
+    window.history.replaceState({}, "", path);
+    mocks.getSession.mockResolvedValueOnce({ data: { session: null } });
+    await render();
+    const signIn =
+      container.querySelector<HTMLAnchorElement>('a[href="/owner"]');
+    expect(signIn?.target).toBe("_blank");
+    expect(signIn?.rel).toContain("noopener");
+    expect(requests).toHaveLength(0);
+    await act(async () => {
+      mocks.onAuthStateChange.mock.calls[0]![0]("SIGNED_IN");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(window.location.pathname + window.location.search).toBe(path);
+    expect(container.textContent).toContain(
+      "Your agent requested wallet preparation",
+    );
+    expect(mocks.startRegistration).not.toHaveBeenCalled();
+  });
+  it("reviews agent requests with owner authentication and waits for a personal click before passkey enrollment", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      `/wallet?approval=${crypto.randomUUID()}&agent=${crypto.randomUUID()}`,
+    );
+    await render();
+    expect(container.textContent).toContain(
+      "Your agent requested wallet preparation",
+    );
+    expect(mocks.startRegistration).not.toHaveBeenCalled();
+    const reviews = () =>
+      requests.filter((r) => r.command === "get_wallet_owner_approval");
+    expect(reviews()).toHaveLength(1);
+    expect(reviews()[0]!.headers.get("authorization")).toBe(
+      "Bearer test-owner-token",
+    );
+    await click();
+    expect(reviews()).toHaveLength(2);
+    expect(mocks.startRegistration).toHaveBeenCalledTimes(1);
+    expect(container.textContent).toContain(wallet.address);
+  });
+  it("blocks expired links without creating a passkey and checks expiry again on click", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      `/wallet?approval=${crypto.randomUUID()}&agent=${crypto.randomUUID()}`,
+    );
+    await render();
+    approvalExpired = true;
+    await click();
+    expect(container.textContent).toContain("approval link has expired");
+    expect(mocks.startRegistration).not.toHaveBeenCalled();
+    expect(
+      requests.some((r) => r.command === "prepare_financial_identity"),
+    ).toBe(false);
+    expect(container.querySelector("button")?.disabled).toBe(true);
+  });
   it("sends owner bearer authentication through the passkey flow and displays only the resulting wallet", async () => {
     await render();
     expect(container.textContent).toContain("Create Normic Wallet");
