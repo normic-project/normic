@@ -95,6 +95,16 @@ beforeEach(() => {
         body: JSON.parse(String(init?.body)),
       });
       if (command === "get_wallet") return Response.json(storedWallet);
+      if (command === "prepare_canary_review")
+        return Response.json({
+          wallet: wallet.address,
+          expiresAt: new Date(Date.now() + 3600000).toISOString(),
+          escrow: `0x${"55".repeat(20)}`,
+          approvalRequired: true,
+          deployed: false,
+          gas: { requiredWei: null },
+          blockers: ["DISTINCT_PROVIDER_AND_REAL_001_USDG_SERVICE_REQUIRED"],
+        });
       if (command === "get_wallet_owner_approval")
         return approvalExpired
           ? Response.json(
@@ -161,6 +171,26 @@ const click = () =>
     container.querySelector("button")!.click();
   });
 describe("Create Normic Wallet", () => {
+  it("shows an authenticated unsigned canary review without prompting for a passkey or sending payments", async () => {
+    storedWallet = wallet;
+    state = "provisioned";
+    await render();
+    await click();
+    expect(container.textContent).toContain("0.01 USDG per transaction");
+    expect(container.textContent).toContain("60 minutes from preparation");
+    expect(container.textContent).toContain("different real owner");
+    expect(container.textContent).toContain("no passkey prompt or transaction");
+    expect(mocks.startRegistration).not.toHaveBeenCalled();
+    const request = requests.find((r) => r.command === "prepare_canary_review");
+    expect(request?.headers.get("authorization")).toBe(
+      "Bearer test-owner-token",
+    );
+    expect(
+      requests
+        .filter((r) => !r.command.startsWith("get_"))
+        .map((r) => r.command),
+    ).toEqual(["prepare_canary_review"]);
+  });
   it("preserves an approval link while the owner signs in in a separate tab", async () => {
     const path = `/wallet?approval=${crypto.randomUUID()}&agent=${crypto.randomUUID()}`;
     window.history.replaceState({}, "", path);
@@ -251,14 +281,18 @@ describe("Create Normic Wallet", () => {
     expect(container.textContent).toContain("counterfactual");
     expect(container.textContent).not.toContain("test-owner-token");
     expect(container.textContent).not.toContain("test-credential");
-    expect(container.querySelector("button")).toBeNull();
+    expect(container.querySelector("button")?.textContent).toBe(
+      "Prepare canary review",
+    );
   });
   it("displays an existing wallet without any passkey ceremony", async () => {
     state = "provisioned";
     storedWallet = wallet;
     await render();
     expect(container.textContent).toContain(wallet.address);
-    expect(container.querySelector("button")).toBeNull();
+    expect(container.querySelector("button")?.textContent).toBe(
+      "Prepare canary review",
+    );
     expect(mocks.startRegistration).not.toHaveBeenCalled();
   });
   it("resumes provider failure without enrolling a second passkey", async () => {

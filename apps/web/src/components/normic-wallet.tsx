@@ -21,6 +21,7 @@ import {
   isVerifiedSupabaseUser,
 } from "@/lib/frontend-auth-state";
 import { ownerRequestHeaders } from "@/lib/owner-request";
+import { CanaryReview } from "./canary-review";
 import {
   loadFinancialWallet,
   reviewWalletApproval,
@@ -404,10 +405,27 @@ export function NormicWallet() {
         </>
       )}
       {wallet ? (
-        <p>
-          Use your existing device or synced passkey to retain control. Normic
-          cannot reset or replace your root key.
-        </p>
+        <>
+          <p>
+            Use your existing device or synced passkey to retain control. Normic
+            cannot reset or replace your root key.
+          </p>
+          {owner && connection?.identity && (
+            <CanaryReview
+              companyId={connection.identity.company.id}
+              getOwnerToken={async () => {
+                const session = (await auth?.auth.getSession())?.data.session;
+                if (
+                  !session?.access_token ||
+                  session.user.id !== owner.subject ||
+                  subject.current !== owner.subject
+                )
+                  throw new WalletRequestError("UNAUTHENTICATED");
+                return session.access_token;
+              }}
+            />
+          )}
+        </>
       ) : null}
       <p className="owner-primary-message" role="status">
         {message}

@@ -1474,6 +1474,144 @@ export class FinancialService {
       },
     );
   }
+  async prepareCanaryReview(a: FinancialActor, companyId: string, key: string) {
+    if (a.kind !== "owner")
+      throw new AuthorizationError("A verified owner must review the canary.");
+    z.uuid().parse(companyId);
+    const result = await this.mutate(
+      a,
+      "financial.canary_review_prepared",
+      key,
+      { companyId, amount: "10000", durationSeconds: 3600 },
+      companyId,
+      async (r) => {
+        const company = await this.requireConnectedOwner(r, a, companyId);
+        const wallet = await r.getWallet(companyId),
+          root = await r.getRootBinding(companyId);
+        if (
+          !wallet?.rootBindingId ||
+          !root ||
+          root.id !== wallet.rootBindingId ||
+          root.status !== "provisioned" ||
+          root.ownerUserId !== company.ownerUserId
+        )
+          throw new PolicyDeniedError(
+            "Create your WebAuthn Normic wallet first.",
+          );
+        const credentials = await r.listWebAuthnCredentials(root.id);
+        const credential = credentials.find(
+          (c) => c.purpose === "primary" && !c.revokedAt,
+        );
+        if (
+          !credential ||
+          p256PublicKey(credentialCose(credential)).rootIdentity !==
+            root.rootIdentity
+        )
+          throw new PolicyDeniedError(
+            "The immutable WebAuthn root binding is invalid.",
+          );
+        if (!this.wallets.prepareWebAuthnCanary)
+          throw new DomainError(
+            "WebAuthn canary preparation is unavailable.",
+            "FINANCIAL_UNAVAILABLE",
+          );
+        const providers = [];
+        for (const candidate of await r.listWallets()) {
+          if (
+            candidate.companyId === companyId ||
+            candidate.address.toLowerCase() === wallet.address.toLowerCase() ||
+            !candidate.rootBindingId ||
+            candidate.walletType !== "erc4337-mav2-webauthn"
+          )
+            continue;
+          const providerCompany = await r.economy.getCompany(
+            candidate.companyId,
+          );
+          if (
+            !providerCompany ||
+            providerCompany.ownerUserId === company.ownerUserId
+          )
+            continue;
+          const providerRoot = await r.getRootBinding(candidate.companyId);
+          if (
+            !providerRoot ||
+            providerRoot.id !== candidate.rootBindingId ||
+            providerRoot.status !== "provisioned" ||
+            providerRoot.ownerUserId !== providerCompany.ownerUserId
+          )
+            continue;
+          const agent = await r.economy.getAgent(candidate.agentId);
+          if (
+            !agent ||
+            agent.status !== "active" ||
+            agent.id !== providerCompany.primaryAgentId ||
+            agent.userId !== providerCompany.ownerUserId
+          )
+            continue;
+          const services = (
+            await r.economy.listServices({
+              companyId: candidate.companyId,
+              status: "active",
+            })
+          ).filter(
+            (s) =>
+              s.agentId === agent.id &&
+              s.pricingModel === "fixed" &&
+              s.quotedCurrency === "USDG" &&
+              s.quotedPrice &&
+              decimalToUnits(s.quotedPrice, 6) === "10000",
+          );
+          providers.push({
+            companyId: candidate.companyId,
+            wallet: candidate.address,
+            serviceIds: services.map((s) => s.id),
+          });
+        }
+        const prepared = await this.wallets.prepareWebAuthnCanary({
+          wallet,
+          credential,
+          preparedAt: Math.floor(Date.now() / 1000),
+          prepareSessionSigner: providers.some((p) => p.serviceIds.length > 0),
+        });
+        const blockers = [
+          ...(!providers.some((p) => p.serviceIds.length)
+            ? ["DISTINCT_PROVIDER_AND_REAL_001_USDG_SERVICE_REQUIRED"]
+            : []),
+          ...(BigInt(prepared.usdgBalance) < 10000n
+            ? ["BUYER_USDG_FUNDING_REQUIRED"]
+            : []),
+          ...(prepared.gas.state !== "ESTIMATED"
+            ? ["USEROP_GAS_ESTIMATE_REQUIRED"]
+            : BigInt(prepared.gas.deficitWei ?? "0") > 0n
+              ? ["BUYER_ETH_FUNDING_REQUIRED"]
+              : []),
+          ...(prepared.allowanceReductionRequired
+            ? ["OWNER_ALLOWANCE_REDUCTION_REQUIRED"]
+            : []),
+          "OWNER_SCOPED_SIGNER_PREPARATION_AND_PASSKEY_APPROVAL_REQUIRED",
+        ];
+        return {
+          ...prepared,
+          state: "REVIEW_ONLY" as const,
+          providers,
+          blockers,
+          revokeAfterCanary: true,
+          requiresOwnerPasskey: true,
+          signatureRequested: false,
+          transactionsSent: 0,
+          warning:
+            "Unsigned review only. No policy, session, approval, wallet deployment or payment has been activated. Gas excludes later session installation and payment lifecycle.",
+        };
+      },
+    );
+    if (Date.parse(result.expiresAt) <= Date.now())
+      throw new ConflictError(
+        "This canary review expired. Prepare a fresh review.",
+      );
+    const view = { ...result };
+    delete view.trustedSignerRef;
+    return view;
+  }
   async revokeSession(a: FinancialActor, companyId: string, key: string) {
     if (a.kind !== "owner")
       throw new AuthorizationError(

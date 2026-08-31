@@ -292,6 +292,12 @@ export interface FinancialChainPort {
 export interface FinancialWalletPort {
   readonly available: boolean;
   readonly autonomousAvailable: boolean;
+  prepareWebAuthnCanary?(input: {
+    wallet: FinancialWallet;
+    credential: FinancialWebAuthnCredential;
+    preparedAt: number;
+    prepareSessionSigner: boolean;
+  }): Promise<CanaryOwnerPreparation>;
   provisionWebAuthnAccount(input: {
     credentialId: string;
     publicKey: EvmHash;
@@ -332,6 +338,41 @@ export interface FinancialWalletPort {
   }>;
   revoke(session: FinancialSession): Promise<void>;
 }
+export type CanaryOwnerPreparation = {
+  wallet: EvmAddress;
+  chainId: 4663;
+  escrow: EvmAddress;
+  token: EvmAddress;
+  maxPerTransaction: "10000";
+  maxPerDay: "10000";
+  expiresAt: string;
+  allowedActions: readonly ["fund", "release"];
+  deployed: boolean;
+  usdgBalance: string;
+  ethBalanceWei: string;
+  approvalRequired: boolean;
+  allowanceReductionRequired: boolean;
+  ownerCalls: SafeCall[];
+  gas: {
+    sponsored: false;
+    state: "ESTIMATED" | "BLOCKED";
+    requiredWei: string | null;
+    deficitWei: string | null;
+    reason: string | null;
+  };
+  unsignedUserOperation: Record<string, string> | null;
+  trustedSignerRef?: string;
+  sessionInstall: SafeCall | null;
+  sessionPublicKey: EvmAddress | null;
+  sessionPolicy: {
+    functions: string[];
+    cumulativeAllowance: "10000";
+    nativeTransferAllowance: "0";
+    global: false;
+    signerBinding:
+      "OWNER_PREPARATION_REQUIRED" | "VERIFIED_PRIVY_SESSION_SIGNER";
+  };
+};
 export type FinanceClaim =
   { replay: false } | { replay: true; response: unknown };
 // Stored in the existing transactional idempotency journal, never a bearer grant.

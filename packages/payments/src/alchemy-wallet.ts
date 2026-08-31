@@ -1,5 +1,6 @@
 import {
   defineChain,
+  erc20Abi,
   http,
   toFunctionSelector,
   decodeFunctionData,
@@ -11,6 +12,7 @@ import {
 import { entryPoint07Address } from "viem/account-abstraction";
 import {
   createModularAccountV2,
+  createModularAccountV2Client,
   predictModularAccountV2Address,
 } from "@account-kit/smart-contracts";
 import { accountFactoryAbi } from "@account-kit/smart-contracts/experimental";
@@ -29,7 +31,15 @@ import {
   type SpendingPolicy,
   type PaymentOperation,
   type EvmAddress,
+  type FinancialWebAuthnCredential,
+  type CanaryOwnerPreparation,
 } from "@normic/core";
+import {
+  canaryOwnerCalls,
+  canarySessionInstall,
+  CANARY_ESCROW,
+  canaryChain,
+} from "./webauthn-canary.js";
 import type { RobinhoodFinancialChain } from "./robinhood-finance.js";
 
 /** Deployment-owned integration. Implementations must validate the full user operation,
@@ -291,6 +301,227 @@ export class AlchemyFinancialWallet implements FinancialWalletPort {
         "FINANCIAL_UNAVAILABLE",
       );
     }
+  }
+  async prepareWebAuthnCanary(input: {
+    wallet: FinancialWallet;
+    credential: FinancialWebAuthnCredential;
+    preparedAt: number;
+    prepareSessionSigner: boolean;
+  }): Promise<CanaryOwnerPreparation> {
+    const { wallet, credential } = input;
+    if (
+      !this.rpcUrl ||
+      !this.apiKey ||
+      !wallet.rootBindingId ||
+      wallet.walletType !== "erc4337-mav2-webauthn" ||
+      credential.rootBindingId !== wallet.rootBindingId ||
+      credential.revokedAt ||
+      credential.purpose !== "primary" ||
+      credential.rpId !== "normic.tech" ||
+      credential.validationEntityId !== 0
+    )
+      throw new PolicyDeniedError(
+        "A verified direct WebAuthn root is required.",
+      );
+    const escrow = await this.chain.validateEscrow({ requireExecution: false });
+    const token = await this.chain.validateToken();
+    if (escrow.address.toLowerCase() !== CANARY_ESCROW || token.decimals !== 6)
+      throw new PolicyDeniedError(
+        "The canary requires its verified escrow and six-decimal USDG.",
+      );
+    const publicKey =
+      `0x${Buffer.from(credential.publicKeyX, "base64url").toString("hex")}${Buffer.from(credential.publicKeyY, "base64url").toString("hex")}` as Hex;
+    const derived = await this.provisionWebAuthnAccount({
+      credentialId: credential.credentialId,
+      publicKey,
+      rpId: "normic.tech",
+      validationEntityId: 0,
+      salt: "0",
+    });
+    if (derived.address.toLowerCase() !== wallet.address.toLowerCase())
+      throw new PolicyDeniedError(
+        "The WebAuthn root does not derive this wallet.",
+      );
+    // This first-canary path proves the factory-bound root before deployment.
+    // Do not assume a deployed account still has the same installed validations.
+    if (derived.deployed)
+      throw new PolicyDeniedError(
+        "Review installed root/session validations before preparing another canary.",
+      );
+    const [allowance, balances] = await Promise.all([
+      this.chain.client!.readContract({
+        address: CANONICAL_USDG,
+        abi: erc20Abi,
+        functionName: "allowance",
+        args: [wallet.address, escrow.address],
+      }),
+      this.chain.balances(wallet.address),
+    ]);
+    const plan = canaryOwnerCalls({
+      allowance: BigInt(allowance),
+      preparedAt: input.preparedAt,
+      escrow: escrow.address,
+      chainId: wallet.chainId,
+    });
+    let sessionInstall: CanaryOwnerPreparation["sessionInstall"] = null;
+    let sessionPublicKey: EvmAddress | null = null;
+    let trustedSignerRef: string | undefined;
+    if (
+      input.prepareSessionSigner &&
+      BigInt(balances.usdg.units) >= 10000n &&
+      !plan.allowanceReductionRequired
+    ) {
+      if (!this.custodian)
+        throw new DomainError(
+          "A Privy scoped signer is required.",
+          "FINANCIAL_UNAVAILABLE",
+        );
+      // Separate signer creation is offchain and idempotent. Never use the deployer
+      // or a root signer, and never create this before a real provider exists.
+      const signer = await this.custodian.createSigner({
+        companyId: wallet.companyId,
+        policyVersion: 1,
+        idempotencyKey: `webauthn-canary:${wallet.rootBindingId}`,
+      });
+      const install = canarySessionInstall({
+        publicKey: signer.publicKey,
+        wallet: wallet.address,
+        expiry: plan.expiry,
+        preparedAt: input.preparedAt,
+        role: "buyer",
+      });
+      for (const address of new Set([
+        install.validationConfig.moduleAddress,
+        ...install.hooks.map((h) => h.hookConfig.address),
+      ])) {
+        const code = await this.chain.client!.getCode({ address });
+        if (!code || code === "0x")
+          throw new DomainError(
+            "Required MAv2 session module is unavailable.",
+            "FINANCIAL_UNAVAILABLE",
+          );
+      }
+      sessionInstall = install.call;
+      sessionPublicKey = signer.publicKey;
+      trustedSignerRef = signer.signerRef;
+    }
+    const ownerCalls = sessionInstall
+      ? [...plan.calls, sessionInstall]
+      : plan.calls;
+    const client = await createModularAccountV2Client({
+      mode: "webauthn",
+      chain: canaryChain,
+      transport: http(this.rpcUrl, { retryCount: 0, timeout: 10_000 }),
+      credential: { id: credential.credentialId, publicKey },
+      rpId: "normic.tech",
+      getFn: async () => {
+        throw new PolicyDeniedError(
+          "The owner must personally approve with their passkey.",
+        );
+      },
+      accountAddress: wallet.address,
+      salt: 0n,
+      factoryAddress: WEBAUTHN_MAV2_FACTORY,
+      signerEntity: { entityId: 0, isGlobalValidation: true },
+    });
+    let unsignedUserOperation: Record<string, string> | null = null;
+    let gas: CanaryOwnerPreparation["gas"] = {
+      sponsored: false,
+      state: "BLOCKED",
+      requiredWei: null,
+      deficitWei: null,
+      reason: "OWNER_USEROP_ESTIMATE_UNAVAILABLE",
+    };
+    try {
+      // buildUserOperation uses only the SDK estimation stub, NEVER the root signer.
+      const op = await client.buildUserOperation({
+        uo: ownerCalls.map((c) => ({ target: c.to, data: c.data, value: 0n })),
+      });
+      const {
+        callGasLimit,
+        verificationGasLimit,
+        preVerificationGas,
+        maxFeePerGas,
+      } = op;
+      if (
+        callGasLimit === undefined ||
+        verificationGasLimit === undefined ||
+        preVerificationGas === undefined ||
+        maxFeePerGas === undefined
+      )
+        throw new Error("Incomplete unsigned gas estimate.");
+      const units =
+        BigInt(callGasLimit) +
+        BigInt(verificationGasLimit) +
+        BigInt(preVerificationGas);
+      if (units <= 0n || BigInt(maxFeePerGas) <= 0n)
+        throw new Error("Invalid unsigned gas estimate.");
+      const required = (units * BigInt(maxFeePerGas) * 130n + 99n) / 100n;
+      const balance = BigInt(balances.eth.units);
+      gas = {
+        sponsored: false,
+        state: "ESTIMATED",
+        requiredWei: required.toString(),
+        deficitWei: (required > balance ? required - balance : 0n).toString(),
+        reason: "OWNER_SETUP_ONLY_EXCLUDES_SESSION_AND_CANARY_GAS",
+      };
+      // Exclude the SDK stub signature and any provider internals from the review response.
+      unsignedUserOperation = {};
+      for (const field of [
+        "sender",
+        "nonce",
+        "factory",
+        "factoryData",
+        "callData",
+        "callGasLimit",
+        "verificationGasLimit",
+        "preVerificationGas",
+        "maxFeePerGas",
+        "maxPriorityFeePerGas",
+      ] as const) {
+        if (field in op && op[field as keyof typeof op] !== undefined)
+          unsignedUserOperation[field] = String(op[field as keyof typeof op]);
+      }
+    } catch (error) {
+      // No dummy estimate or EOA gas sum is substituted for a counterfactual UserOperation.
+      if (
+        error instanceof Error &&
+        /AA21|prefund|insufficient funds/i.test(error.message)
+      )
+        gas.reason = "INSUFFICIENT_ETH_FOR_ESTIMATION";
+    }
+    return {
+      wallet: wallet.address,
+      chainId: 4663,
+      escrow: escrow.address,
+      token: CANONICAL_USDG,
+      maxPerTransaction: "10000",
+      maxPerDay: "10000",
+      expiresAt: new Date(plan.expiry * 1000).toISOString(),
+      allowedActions: ["fund", "release"],
+      deployed: derived.deployed,
+      usdgBalance: balances.usdg.units,
+      ethBalanceWei: balances.eth.units,
+      approvalRequired: plan.approvalRequired,
+      allowanceReductionRequired: plan.allowanceReductionRequired,
+      ownerCalls,
+      gas,
+      unsignedUserOperation,
+      sessionInstall,
+      sessionPublicKey,
+      ...(trustedSignerRef ? { trustedSignerRef } : {}),
+      sessionPolicy: {
+        functions: sessionSelectors({
+          allowedActions: ["fund", "release"],
+        } as SpendingPolicy),
+        cumulativeAllowance: "10000",
+        nativeTransferAllowance: "0",
+        global: false,
+        signerBinding: sessionInstall
+          ? "VERIFIED_PRIVY_SESSION_SIGNER"
+          : "OWNER_PREPARATION_REQUIRED",
+      },
+    };
   }
   async prepareSession(
     wallet: FinancialWallet,

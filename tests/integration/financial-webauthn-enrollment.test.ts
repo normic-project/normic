@@ -55,7 +55,8 @@ describe("financial WebAuthn enrollment and provisioning", () => {
     companyId: string,
     agent: Awaited<ReturnType<typeof createIdentity>>,
     credentialId: string;
-  const provision = vi.fn();
+  const provision = vi.fn(),
+    canary = vi.fn();
   beforeEach(async () => {
     rt = await createTestRuntime();
     repo = new PostgresFinancialRepository(postgresJsonParameters(rt.database));
@@ -102,6 +103,7 @@ describe("financial WebAuthn enrollment and provisioning", () => {
         available: true,
         autonomousAvailable: false,
         provisionWebAuthnAccount: provision,
+        prepareWebAuthnCanary: canary,
       } as unknown as FinancialWalletPort,
       {
         origin: "https://normic.tech",
@@ -140,6 +142,57 @@ describe("financial WebAuthn enrollment and provisioning", () => {
     );
     return { passkey, response, key };
   };
+
+  it("prepares an idempotent owner-only canary review without a fake provider, active policy or session", async () => {
+    await finish();
+    const wallet = await service.provisionFinancialWallet(
+      owner,
+      companyId,
+      crypto.randomUUID(),
+    );
+    const key = crypto.randomUUID();
+    canary.mockReset().mockResolvedValue({
+      wallet: wallet.address,
+      usdgBalance: "0",
+      expiresAt: new Date(Date.now() + 3600000).toISOString(),
+      gas: { state: "BLOCKED", deficitWei: null },
+      allowanceReductionRequired: false,
+      trustedSignerRef: "test-internal-reference",
+    });
+    const review = await service.prepareCanaryReview(owner, companyId, key);
+    expect(await service.prepareCanaryReview(owner, companyId, key)).toEqual(
+      review,
+    );
+    expect(review.providers).toEqual([]);
+    expect(review.blockers).toContain(
+      "DISTINCT_PROVIDER_AND_REAL_001_USDG_SERVICE_REQUIRED",
+    );
+    expect(review.blockers).toContain("BUYER_USDG_FUNDING_REQUIRED");
+    expect(review).not.toHaveProperty("trustedSignerRef");
+    expect(canary).toHaveBeenCalledTimes(1);
+    expect(canary).toHaveBeenCalledWith(
+      expect.objectContaining({ prepareSessionSigner: false }),
+    );
+    expect(await repo.getSession(companyId)).toBeNull();
+    expect(await repo.getPolicy(companyId)).toBeNull();
+    await expect(
+      service.prepareCanaryReview(
+        { kind: "agent", context: agent.context },
+        companyId,
+        crypto.randomUUID(),
+      ),
+    ).rejects.toThrow("verified owner");
+    await expect(
+      service.prepareCanaryReview(
+        {
+          kind: "owner",
+          owner: { ...owner.owner, subject: crypto.randomUUID() },
+        },
+        companyId,
+        crypto.randomUUID(),
+      ),
+    ).rejects.toThrow();
+  });
 
   it("agent preparation requires owner WebAuthn and returns the same wallet after owner completion", async () => {
     const actor: FinancialActor = {

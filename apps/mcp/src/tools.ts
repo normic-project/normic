@@ -414,6 +414,7 @@ export function createNormicMcpHandler(
         if (
           existing.has(name) ||
           name === "prepare_financial_identity" ||
+          name === "prepare_canary_review" ||
           name === "provision_financial_wallet" ||
           name.includes("financial_passkey") ||
           name.includes("financial_recovery")

@@ -20,6 +20,7 @@ const walletStages = {
   begin_financial_passkey_registration: "PASSKEY_CHALLENGE",
   complete_financial_passkey_registration: "PASSKEY_VERIFICATION",
   provision_financial_wallet: "WALLET_PROVISIONING",
+  prepare_canary_review: "CANARY_PREPARATION",
 } as const;
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";

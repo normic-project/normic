@@ -1,6 +1,6 @@
 # Robinhood Mainnet deployment
 
-Current status: **BLOCKED — not deployed.** There is no Normic escrow address, deployment transaction hash or deployed-address registry entry to report. No mainnet write has been performed.
+Current status: **Escrow deployed; canary execution remains blocked.** Robinhood Mainnet escrow: `0xDa3ea8Cd849fF916Aa0ee6b1088F151c2Fa51C47`, deployment block `50271033`. Deployment configuration/runtime are checked against production RPC; do not redeploy. The steps below document the original deployment process.
 
 ## Required configuration
 
@@ -24,4 +24,18 @@ Activation additionally requires the real `NORMIC_ESCROW_ADDRESS`, `NORMIC_ESCRO
 8. Connect and test the reviewed session custodian/Alchemy owner authorization flow, including onchain revocation, exact approval and cap enforcement. No automatic owner approval or unrestricted permission is permitted.
 9. Only with a deliberately funded, explicitly authorized low-value QA wallet, perform the real lifecycle. Do not transfer funds merely to make checks pass.
 
-Source verification, deployment and funded QA are not claimed as completed. Existing artifacts contain no invented deployed address or transaction hash. Sites hosting is not an automatic deployment target for this Node/PostgreSQL/MCP runtime; production hosting must preserve those server/database requirements rather than replacing them with a simulated static site.
+Funded QA and explorer source verification are not claimed as completed. Production hosting must preserve the Node/PostgreSQL/MCP runtime rather than replacing it with a simulated static site.
+
+## First WebAuthn canary review (no signature or submission)
+
+Run `pnpm validate:phase4-canary-authorization` from the workspace root after building packages. It loads `apps/web/.env.production.local`, requires all four execution flags false, runs a read-only database transaction, verifies the real buyer/root/factory/escrow and reports balances and counterfactual UserOperation gas. It cannot create a signer, wallet, passkey, payment or production DB row. The old EOA inspector is not used.
+
+The verified buyer is `0x357e143fc3979c55bb2903112d759f95444c9edc`. The owner can open `/wallet` and choose **Prepare canary review**. Owner authentication, connected-company binding and the immutable P-256 root are rechecked. `prepare_canary_review` is owner-only and not exposed as an MCP tool. The review is persisted using existing idempotency/audit infrastructure and expires after 60 minutes; it never persists an enabled financial policy or session. No new migration is required.
+
+The unsigned root action includes `configureSpending(true, expiry, 10000, 10000)` and, only when needed, `approve(escrow, 10000)` on canonical USDG. A larger existing approval blocks this canary until the owner independently reduces it. No unlimited approval is prepared. Counterfactual deployment is part of the first owner UserOperation, not an agent session permission. Gas quotes use actual bundler estimation and a 30% buffer; an owner-setup-only quote excludes later session/payment/revocation gas and must not be represented as complete lifecycle funding.
+
+A distinct real provider owner must sign in, connect their own MCP agent, create their own passkey wallet, and publish the genuine agreed fixed-price 0.01 USDG service. No second buyer company, dummy job or fabricated provider substitutes for this. Provider permissions are `accept` and `submitResult` only; the provider separately approves its own root/session setup.
+
+The installed Account Kit MAv2 [low-level session hooks](https://www.alchemy.com/docs/wallets/smart-contracts/modular-account-v2/session-keys/adding-session-keys) compile a non-global single-signer validation with an exact escrow selector allowlist, canonical USDG limit, one-hour TimeRange hook and zero-native-transfer hook. The buyer permits only `fundWithSession` and `acceptResult`. Generic `erc20-token-transfer` is deliberately not used to add direct approve/transfer selectors. Its ERC20 execution hook does not count escrow-internal `transferFrom`: the cumulative canary pull is bounded by the exact owner ERC20 approval plus the escrow per-operation/day caps. These layers must remain together.
+
+An offchain Privy session signer can be prepared only after a real provider/service and USDG funding exist. It is idempotently bound separately from root ownership. The unsigned installation and public address are returned for review; its internal signer reference remains server-side. No root signature is requested or consumed by this review, and no onchain grant is installed. Do not use the legacy EOA `register_financial_session` route for a WebAuthn root. After prerequisites are ready, refresh the complete request and obtain explicit owner passkey approval before any submission. Verify finalized settlement/indexer/ledger/audit outcomes, then revoke each canary-only session and escrow authority through its owner.
