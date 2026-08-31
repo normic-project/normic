@@ -1,6 +1,18 @@
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, ECDH, randomBytes, randomUUID } from "node:crypto";
 import { keccak256, toHex, erc20Abi, encodeFunctionData } from "viem";
 import { z } from "zod";
+import {
+  generateAuthenticationOptions,
+  generateRegistrationOptions,
+  verifyAuthenticationResponse,
+  verifyRegistrationResponse,
+  type AuthenticationResponseJSON,
+  type RegistrationResponseJSON,
+} from "@simplewebauthn/server";
+import {
+  decodeCredentialPublicKey,
+  isoCBOR,
+} from "@simplewebauthn/server/helpers";
 import {
   AuthenticationError,
   AuthorizationError,
@@ -38,6 +50,10 @@ import {
   type FinancialSession,
   type FinancialSessionAuthorization,
   type FinancialRootBinding,
+  type FinancialWebAuthnCredential,
+  type FinancialWebAuthnChallengePurpose,
+  type FinancialWebAuthnRegistrationResponse,
+  type FinancialWebAuthnAuthenticationResponse,
   type SafeCall,
 } from "./finance-types.js";
 
@@ -57,6 +73,133 @@ const digest = (value: unknown) =>
   createHash("sha256").update(canonicalJson(value)).digest("hex");
 const hashSecret = (value: string) =>
   createHash("sha256").update(value).digest("hex");
+export const FINANCIAL_WEBAUTHN_RP_ID = "normic.tech" as const;
+export const FINANCIAL_WEBAUTHN_ORIGIN = "https://normic.tech" as const;
+const FINANCIAL_WEBAUTHN_CHALLENGE_TTL_MS = 5 * 60_000;
+const base64url = z
+  .string()
+  .min(1)
+  .max(16_384)
+  .regex(/^[A-Za-z0-9_-]+$/);
+export const financialWebAuthnRegistrationResponseSchema = z
+  .object({
+    id: base64url,
+    rawId: base64url,
+    type: z.literal("public-key"),
+    response: z
+      .object({
+        attestationObject: base64url,
+        clientDataJSON: base64url,
+        transports: z
+          .array(
+            z.enum([
+              "ble",
+              "cable",
+              "hybrid",
+              "internal",
+              "nfc",
+              "smart-card",
+              "usb",
+            ]),
+          )
+          .max(7)
+          .optional(),
+        publicKeyAlgorithm: z.number().int().optional(),
+        publicKey: base64url.optional(),
+        authenticatorData: base64url.optional(),
+      })
+      .strict(),
+    clientExtensionResults: z.record(z.string(), z.unknown()),
+    authenticatorAttachment: z.string().max(64).optional(),
+  })
+  .strict();
+export const financialWebAuthnAuthenticationResponseSchema = z
+  .object({
+    id: base64url,
+    rawId: base64url,
+    type: z.literal("public-key"),
+    response: z
+      .object({
+        authenticatorData: base64url,
+        clientDataJSON: base64url,
+        signature: base64url,
+        userHandle: base64url.optional(),
+      })
+      .strict(),
+    clientExtensionResults: z.record(z.string(), z.unknown()),
+    authenticatorAttachment: z.string().max(64).optional(),
+  })
+  .strict();
+
+function clientChallenge(clientDataJSON: string) {
+  try {
+    const parsed = JSON.parse(
+      Buffer.from(clientDataJSON, "base64url").toString("utf8"),
+    ) as unknown;
+    return z
+      .object({
+        challenge: base64url,
+        crossOrigin: z.literal(false).optional(),
+        topOrigin: z.never().optional(),
+      })
+      .passthrough()
+      .parse(parsed).challenge;
+  } catch {
+    throw new AuthenticationError("The passkey response is invalid.");
+  }
+}
+
+function p256PublicKey(credentialPublicKey: Uint8Array) {
+  const key: unknown = decodeCredentialPublicKey(
+    Uint8Array.from(credentialPublicKey),
+  );
+  if (!(key instanceof Map))
+    throw new AuthenticationError("A P-256 passkey is required.");
+  if (
+    key.get(1) !== 2 ||
+    key.get(3) !== -7 ||
+    key.get(-1) !== 1 ||
+    [...key.keys()].some((field) => ![1, 3, -1, -2, -3].includes(field))
+  )
+    throw new AuthenticationError("A P-256 passkey is required.");
+  const rawX = key.get(-2),
+    rawY = key.get(-3);
+  if (
+    !(rawX instanceof Uint8Array) ||
+    !(rawY instanceof Uint8Array) ||
+    rawX.length !== 32 ||
+    rawY.length !== 32
+  )
+    throw new AuthenticationError("A P-256 passkey is required.");
+  const x = Buffer.from(rawX),
+    y = Buffer.from(rawY);
+  // Reject off-curve points, not just correctly sized untrusted coordinates.
+  try {
+    ECDH.convertKey(Buffer.concat([Buffer.from([4]), x, y]), "prime256v1");
+  } catch {
+    throw new AuthenticationError("A valid P-256 passkey is required.");
+  }
+  return {
+    x: x.toString("base64url"),
+    y: y.toString("base64url"),
+    publicKey: `0x${x.toString("hex")}${y.toString("hex")}` as EvmHash,
+    rootIdentity: `webauthn-p256:${createHash("sha256")
+      .update(Buffer.concat([x, y]))
+      .digest("hex")}` as const,
+  };
+}
+function credentialCose(credential: FinancialWebAuthnCredential) {
+  // Reconstruct only the public COSE fields; never persist arbitrary attestation key material.
+  return isoCBOR.encode(
+    new Map<number, number | Uint8Array>([
+      [1, 2],
+      [3, -7],
+      [-1, 1],
+      [-2, Buffer.from(credential.publicKeyX, "base64url")],
+      [-3, Buffer.from(credential.publicKeyY, "base64url")],
+    ]),
+  );
+}
 function fail(message: string): never {
   throw new DomainError(message, "FINANCIAL_UNAVAILABLE");
 }
@@ -181,6 +324,7 @@ export class FinancialService {
     payload: unknown,
     companyId: string | null,
     run: (r: FinancialRepository) => Promise<T>,
+    persistResponse = true,
   ): Promise<T> {
     idempotencyKeySchema.parse(key);
     try {
@@ -188,10 +332,21 @@ export class FinancialService {
         await this.authorize(r, a, companyId ?? undefined);
         if (companyId) await r.lockCompany(companyId);
         const claim = await r.claim(this.actorId(a), op, key, digest(payload));
-        if (claim.replay) return claim.response as T;
+        if (claim.replay) {
+          if (!persistResponse)
+            throw new ConflictError(
+              "Request a new passkey challenge to retry.",
+            );
+          return claim.response as T;
+        }
         const result = await run(r);
         await r.audit(op, companyId, null, this.actorId(a));
-        await r.complete(this.actorId(a), op, key, result);
+        await r.complete(
+          this.actorId(a),
+          op,
+          key,
+          persistResponse ? result : { challengeIssued: true },
+        );
         return result;
       });
     } catch (error) {
@@ -328,6 +483,468 @@ export class FinancialService {
           smartAccountAddress: null,
         };
       },
+    );
+  }
+  async beginPasskeyRegistration(
+    a: FinancialActor,
+    companyId: string,
+    purpose: "primary" | "recovery",
+    key: string,
+  ) {
+    if (a.kind !== "owner")
+      throw new AuthorizationError(
+        "A verified owner must create the financial passkey.",
+      );
+    return this.mutate(
+      a,
+      `financial.passkey_${purpose}_challenge`,
+      key,
+      { companyId, purpose },
+      companyId,
+      async (r) => {
+        await this.requireConnectedOwner(r, a, companyId);
+        const root = await r.getRootBinding(companyId);
+        const company = await r.economy.getCompany(companyId);
+        if (!root || !company || root.ownerUserId !== company.ownerUserId)
+          throw new NotFoundError("Financial root binding");
+        if (
+          (purpose === "primary" && root.status !== "pending_passkey") ||
+          purpose === "recovery"
+        )
+          throw new PolicyDeniedError(
+            purpose === "recovery"
+              ? "Authorize recovery enrollment with an active passkey first."
+              : "The primary financial passkey cannot be replaced.",
+          );
+        const credentials = await r.listWebAuthnCredentials(root.id);
+        const options = await generateRegistrationOptions({
+          rpName: "Normic",
+          rpID: FINANCIAL_WEBAUTHN_RP_ID,
+          userID: Buffer.from(company.id, "utf8"),
+          userName: company.slug,
+          userDisplayName: company.name,
+          attestationType: "none",
+          authenticatorSelection: {
+            residentKey: "required",
+            userVerification: "required",
+          },
+          supportedAlgorithmIDs: [-7],
+          timeout: FINANCIAL_WEBAUTHN_CHALLENGE_TTL_MS,
+          excludeCredentials: credentials.map((credential) => ({
+            id: credential.credentialId,
+            transports: credential.transports as never,
+          })),
+        });
+        await r.createWebAuthnChallenge({
+          id: randomUUID(),
+          rootBindingId: root.id,
+          ownerUserId: root.ownerUserId,
+          challengeHash: hashSecret(options.challenge),
+          purpose: `register_${purpose}`,
+          expiresAt: new Date(
+            Date.now() + FINANCIAL_WEBAUTHN_CHALLENGE_TTL_MS,
+          ).toISOString(),
+        });
+        return options;
+      },
+      false,
+    );
+  }
+  async completePasskeyRegistration(
+    a: FinancialActor,
+    companyId: string,
+    purpose: "primary" | "recovery",
+    rawResponse: FinancialWebAuthnRegistrationResponse,
+    key: string,
+  ) {
+    if (a.kind !== "owner")
+      throw new AuthorizationError(
+        "A verified owner must create the financial passkey.",
+      );
+    const response =
+      financialWebAuthnRegistrationResponseSchema.parse(rawResponse);
+    const challenge = clientChallenge(response.response.clientDataJSON);
+    return this.mutate(
+      a,
+      `financial.passkey_${purpose}_registered`,
+      key,
+      { companyId, purpose, response },
+      companyId,
+      async (r) => {
+        await this.requireConnectedOwner(r, a, companyId);
+        const root = await r.getRootBinding(companyId);
+        const company = await r.economy.getCompany(companyId);
+        if (!root || !company || root.ownerUserId !== company.ownerUserId)
+          throw new NotFoundError("Financial root binding");
+        if (
+          (purpose === "primary" && root.status !== "pending_passkey") ||
+          (purpose === "recovery" && root.status !== "provisioned")
+        )
+          throw new ConflictError(
+            purpose === "primary"
+              ? "This company already has an immutable financial root."
+              : "The financial root is not active.",
+          );
+        const challengePurpose: FinancialWebAuthnChallengePurpose = `register_${purpose}`;
+        if (
+          !(await r.consumeWebAuthnChallenge({
+            rootBindingId: root.id,
+            ownerUserId: root.ownerUserId,
+            challengeHash: hashSecret(challenge),
+            purpose: challengePurpose,
+          }))
+        )
+          throw new AuthenticationError(
+            "The passkey challenge is expired or already used.",
+          );
+        const verification = await verifyRegistrationResponse({
+          response: response as RegistrationResponseJSON,
+          expectedChallenge: challenge,
+          expectedOrigin: FINANCIAL_WEBAUTHN_ORIGIN,
+          expectedRPID: FINANCIAL_WEBAUTHN_RP_ID,
+          requireUserPresence: true,
+          requireUserVerification: true,
+          supportedAlgorithmIDs: [-7],
+        }).catch(() => {
+          throw new AuthenticationError(
+            "The passkey registration could not be verified. Request a new challenge.",
+          );
+        });
+        if (
+          !verification.verified ||
+          !verification.registrationInfo.userVerified ||
+          verification.registrationInfo.rpID !== FINANCIAL_WEBAUTHN_RP_ID ||
+          verification.registrationInfo.origin !== FINANCIAL_WEBAUTHN_ORIGIN
+        )
+          throw new AuthenticationError(
+            "The passkey registration could not be verified.",
+          );
+        const info = verification.registrationInfo;
+        if (info.credential.id !== response.id)
+          throw new AuthenticationError(
+            "The passkey credential identity does not match.",
+          );
+        if (await r.getWebAuthnCredential(info.credential.id, true))
+          throw new ConflictError(
+            "This passkey is already bound to a Normic financial root.",
+          );
+        const publicKey = p256PublicKey(info.credential.publicKey);
+        const now = new Date().toISOString();
+        const credential: FinancialWebAuthnCredential = {
+          id: randomUUID(),
+          rootBindingId: root.id,
+          credentialId: info.credential.id,
+          publicKeyX: publicKey.x,
+          publicKeyY: publicKey.y,
+          algorithm: -7,
+          rpId: FINANCIAL_WEBAUTHN_RP_ID,
+          transports: response.response.transports ?? [],
+          validationEntityId: 0,
+          purpose,
+          signCount: String(info.credential.counter),
+          createdAt: now,
+          revokedAt: null,
+        };
+        await r.saveWebAuthnCredential(credential);
+        if (purpose === "recovery") {
+          await r.audit(
+            "financial.recovery_passkey_registered",
+            companyId,
+            credential.id,
+            this.actorId(a),
+          );
+          // This is an owner-authorized recovery candidate, NOT installed root authority.
+          // Activating it requires an explicit root-signed onchain installValidation.
+          return {
+            state: "recovery_prepared" as const,
+            onchainAuthorizationRequired: true,
+          };
+        }
+        const verifiedRoot: FinancialRootBinding = {
+          ...root,
+          status: "passkey_verified",
+          rootIdentity: publicKey.rootIdentity,
+          updatedAt: now,
+        };
+        await r.updateRootBinding(verifiedRoot);
+        return { state: "passkey_verified" as const, companyId };
+      },
+    );
+  }
+  private async requireConnectedOwner(
+    r: FinancialRepository,
+    a: FinancialActor,
+    companyId: string,
+  ) {
+    if (a.kind !== "owner")
+      throw new AuthorizationError("A verified owner is required.");
+    const company = await r.economy.getCompany(companyId);
+    const agent = company
+      ? await r.economy.getAgent(company.primaryAgentId)
+      : null;
+    if (
+      !company ||
+      !agent ||
+      agent.status !== "active" ||
+      agent.companyId !== companyId ||
+      agent.userId !== company.ownerUserId
+    )
+      throw new PolicyDeniedError(
+        "Complete verified owner and agent onboarding first.",
+      );
+    for (const credential of await r.economy.listCredentials(agent.id)) {
+      if (
+        credential.lastUsedAt &&
+        !credential.revokedAt &&
+        (!credential.expiresAt || credential.expiresAt > new Date()) &&
+        (await r.economy.hasDynamicOAuthGrant({
+          audience: credential.audience,
+          ownerSubject: a.owner.subject,
+          agentId: agent.id,
+          credentialId: credential.id,
+        }))
+      )
+        return company;
+    }
+    throw new PolicyDeniedError(
+      "A real authenticated MCP connection is required before financial identity initialization.",
+    );
+  }
+  async provisionFinancialWallet(
+    a: FinancialActor,
+    companyId: string,
+    key: string,
+  ) {
+    if (a.kind !== "owner")
+      throw new AuthorizationError(
+        "A verified owner must initialize the financial wallet.",
+      );
+    return this.mutate(
+      a,
+      "financial.wallet_provisioned",
+      key,
+      { companyId },
+      companyId,
+      async (r) => {
+        const root = await r.getRootBinding(companyId);
+        if (!root || !["passkey_verified", "provisioned"].includes(root.status))
+          throw new PolicyDeniedError("Verify your financial passkey first.");
+        const existingWallet = await r.getWallet(companyId);
+        if (existingWallet) {
+          if (
+            existingWallet.rootBindingId !== root.id ||
+            existingWallet.address !== root.smartAccountAddress
+          )
+            throw new ConflictError(
+              "The existing company financial wallet does not match this root.",
+            );
+          return existingWallet;
+        }
+        const company = await this.requireConnectedOwner(r, a, companyId);
+        const credential = (await r.listWebAuthnCredentials(root.id)).find(
+          (c) => c.purpose === "primary" && !c.revokedAt,
+        );
+        if (
+          !credential ||
+          credential.rpId !== FINANCIAL_WEBAUTHN_RP_ID ||
+          credential.validationEntityId !== 0
+        )
+          throw new PolicyDeniedError(
+            "The verified financial root is unavailable.",
+          );
+        const publicKey = p256PublicKey(credentialCose(credential));
+        if (publicKey.rootIdentity !== root.rootIdentity)
+          throw new PolicyDeniedError(
+            "The financial root binding does not match.",
+          );
+        if (!this.wallets.available)
+          fail("Alchemy wallet infrastructure is not configured.");
+        await this.chain.validateChain();
+        const account = await this.wallets.provisionWebAuthnAccount({
+          credentialId: credential.credentialId,
+          publicKey: publicKey.publicKey,
+          rpId: FINANCIAL_WEBAUTHN_RP_ID,
+          validationEntityId: 0,
+          salt: "0",
+        });
+        const now = new Date().toISOString();
+        const wallet = {
+          companyId,
+          agentId: company.primaryAgentId,
+          address: addressSchema.parse(account.address),
+          ownerAddress: addressSchema.parse(account.address),
+          rootBindingId: root.id,
+          chainId: 4663 as const,
+          provider: "alchemy-wallet-api" as const,
+          walletType: "erc4337-mav2-webauthn" as const,
+          authorizationStatus: "owner_verified" as const,
+          deployed: account.deployed,
+          createdAt: now,
+        };
+        const provisionedRoot: FinancialRootBinding = {
+          ...root,
+          status: "provisioned",
+          smartAccountAddress: wallet.address,
+          updatedAt: now,
+        };
+        await r.updateRootBinding(provisionedRoot);
+        await r.saveWallet(wallet);
+        return wallet;
+      },
+    );
+  }
+  async beginRecoveryAuthorization(
+    a: FinancialActor,
+    companyId: string,
+    key: string,
+  ) {
+    if (a.kind !== "owner")
+      throw new AuthorizationError(
+        "A verified owner must authorize recovery enrollment.",
+      );
+    return this.mutate(
+      a,
+      "financial.recovery_authorization_challenge",
+      key,
+      { companyId },
+      companyId,
+      async (r) => {
+        const root = await r.getRootBinding(companyId);
+        if (!root || root.status !== "provisioned")
+          throw new PolicyDeniedError("The financial root is not active.");
+        const credentials = (await r.listWebAuthnCredentials(root.id)).filter(
+          (credential) =>
+            credential.purpose === "primary" && !credential.revokedAt,
+        );
+        if (!credentials.length)
+          throw new PolicyDeniedError(
+            "An active root passkey is required for recovery enrollment.",
+          );
+        const options = await generateAuthenticationOptions({
+          rpID: FINANCIAL_WEBAUTHN_RP_ID,
+          userVerification: "required",
+          allowCredentials: credentials.map((credential) => ({
+            id: credential.credentialId,
+            transports: credential.transports as never,
+          })),
+        });
+        await r.createWebAuthnChallenge({
+          id: randomUUID(),
+          rootBindingId: root.id,
+          ownerUserId: root.ownerUserId,
+          challengeHash: hashSecret(options.challenge),
+          purpose: "root_assertion",
+          expiresAt: new Date(
+            Date.now() + FINANCIAL_WEBAUTHN_CHALLENGE_TTL_MS,
+          ).toISOString(),
+        });
+        return options;
+      },
+      false,
+    );
+  }
+  async authorizeRecoveryRegistration(
+    a: FinancialActor,
+    companyId: string,
+    rawResponse: FinancialWebAuthnAuthenticationResponse,
+    key: string,
+  ) {
+    if (a.kind !== "owner")
+      throw new AuthorizationError(
+        "A verified owner must authorize recovery enrollment.",
+      );
+    const response =
+      financialWebAuthnAuthenticationResponseSchema.parse(rawResponse);
+    const challenge = clientChallenge(response.response.clientDataJSON);
+    return this.mutate(
+      a,
+      "financial.recovery_authorized",
+      key,
+      { companyId, response },
+      companyId,
+      async (r) => {
+        const root = await r.getRootBinding(companyId);
+        if (!root || root.status !== "provisioned")
+          throw new PolicyDeniedError("The financial root is not active.");
+        const credential = await r.getWebAuthnCredential(response.id, true);
+        if (
+          !credential ||
+          credential.purpose !== "primary" ||
+          credential.rootBindingId !== root.id ||
+          credential.revokedAt
+        )
+          throw new AuthenticationError(
+            "An active root passkey is required for recovery enrollment.",
+          );
+        if (
+          !(await r.consumeWebAuthnChallenge({
+            rootBindingId: root.id,
+            ownerUserId: root.ownerUserId,
+            challengeHash: hashSecret(challenge),
+            purpose: "root_assertion",
+          }))
+        )
+          throw new AuthenticationError(
+            "The passkey challenge is expired or already used.",
+          );
+        const verification = await verifyAuthenticationResponse({
+          response: response as AuthenticationResponseJSON,
+          expectedChallenge: challenge,
+          expectedOrigin: FINANCIAL_WEBAUTHN_ORIGIN,
+          expectedRPID: FINANCIAL_WEBAUTHN_RP_ID,
+          requireUserVerification: true,
+          credential: {
+            id: credential.credentialId,
+            publicKey: credentialCose(credential),
+            counter: Number(credential.signCount),
+            transports: credential.transports as never,
+          },
+        }).catch(() => {
+          throw new AuthenticationError(
+            "The root passkey assertion could not be verified.",
+          );
+        });
+        if (!verification.verified)
+          throw new AuthenticationError(
+            "The root passkey assertion could not be verified.",
+          );
+        await r.updateWebAuthnSignCount(
+          credential.credentialId,
+          String(verification.authenticationInfo.newCounter),
+        );
+        const company = await r.economy.getCompany(companyId);
+        if (!company) throw new NotFoundError("Company");
+        const existing = await r.listWebAuthnCredentials(root.id);
+        const options = await generateRegistrationOptions({
+          rpName: "Normic",
+          rpID: FINANCIAL_WEBAUTHN_RP_ID,
+          userID: Buffer.from(company.id, "utf8"),
+          userName: company.slug,
+          userDisplayName: company.name,
+          attestationType: "none",
+          authenticatorSelection: {
+            residentKey: "required",
+            userVerification: "required",
+          },
+          supportedAlgorithmIDs: [-7],
+          excludeCredentials: existing.map((item) => ({
+            id: item.credentialId,
+            transports: item.transports as never,
+          })),
+        });
+        await r.createWebAuthnChallenge({
+          id: randomUUID(),
+          rootBindingId: root.id,
+          ownerUserId: root.ownerUserId,
+          challengeHash: hashSecret(options.challenge),
+          purpose: "register_recovery",
+          expiresAt: new Date(
+            Date.now() + FINANCIAL_WEBAUTHN_CHALLENGE_TTL_MS,
+          ).toISOString(),
+        });
+        return options;
+      },
+      false,
     );
   }
   async getBalance(a: FinancialActor, companyId: string) {
@@ -482,52 +1099,6 @@ export class FinancialService {
     if (!s || new Date(s.expiresAt) <= new Date())
       throw new AuthenticationError();
     return { kind: "human", wallet: s.wallet, sessionId: s.id };
-  }
-  async createWallet(
-    a: FinancialActor,
-    companyId: string,
-    walletProofToken: string,
-    key: string,
-  ) {
-    if (a.kind !== "owner")
-      throw new AuthorizationError(
-        "Only a verified human owner can connect a smart wallet.",
-      );
-    const proof = await this.humanActor(walletProofToken);
-    if (proof.kind !== "human") throw new AuthenticationError();
-    return this.mutate(
-      a,
-      "wallet.connected",
-      key,
-      { companyId, ownerAddress: proof.wallet },
-      companyId,
-      async (r) => {
-        if (await r.getWallet(companyId))
-          throw new ConflictError(
-            "This company already has an immutable wallet identity.",
-          );
-        if (!this.wallets.available)
-          fail("Alchemy Wallet API configuration is missing.");
-        await this.chain.validateChain();
-        const company = await r.economy.getCompany(companyId);
-        if (!company) throw new NotFoundError("Company");
-        const account = await this.wallets.requestAccount(proof.wallet);
-        const w = {
-          companyId,
-          agentId: company.primaryAgentId,
-          address: account.address.toLowerCase() as EvmAddress,
-          ownerAddress: proof.wallet,
-          chainId: 4663 as const,
-          provider: "alchemy-wallet-api" as const,
-          walletType: "erc4337-sma-b" as const,
-          authorizationStatus: "owner_verified" as const,
-          deployed: account.deployed,
-          createdAt: new Date().toISOString(),
-        };
-        await r.saveWallet(w);
-        return w;
-      },
-    );
   }
   async updatePolicy(
     a: FinancialActor,

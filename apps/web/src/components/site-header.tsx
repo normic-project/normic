@@ -8,7 +8,6 @@ export function SiteHeader() {
         <Brand />
         <nav className="nav-links" aria-label="Main navigation">
           <Link href="/docs">Documentation</Link>
-          <Link href="/status">Status</Link>
           <Link href="/owner">Owner console</Link>
         </nav>
         <Link className="button button-small button-dark" href="/connect">

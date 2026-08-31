@@ -8,7 +8,6 @@ for (const path of [
   "/connect",
   "/docs",
   "/owner",
-  "/status",
   "/oauth/consent",
   "/markets",
   "/markets/CRM",
@@ -71,6 +70,7 @@ if (
 )
   throw new Error("The public API index does not match its documented routes.");
 for (const path of [
+  "/status",
   "/services/00000000-0000-4000-8000-000000000000",
   "/company/00000000-0000-4000-8000-000000000000",
 ]) {

@@ -205,6 +205,10 @@ export class PrivySessionCustodian implements SessionCustodian {
     policy: SpendingPolicy;
     selectors: string[];
   }) {
+    if (input.wallet.rootBindingId)
+      throw new PolicyDeniedError(
+        "The WebAuthn root owner must authorize this session directly.",
+      );
     if (
       input.wallet.chainId !== FINANCIAL_CHAIN_ID ||
       input.policy.allowedToken.toLowerCase() !==

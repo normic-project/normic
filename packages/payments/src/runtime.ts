@@ -17,6 +17,7 @@ export function createFinancialRuntime(
       chain,
       env.ALCHEMY_API_KEY,
       sessionCustodian,
+      env.ROBINHOOD_RPC_URL,
     );
   return new FinancialService(repository, chain, wallets, {
     origin:

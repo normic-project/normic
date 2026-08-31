@@ -15,6 +15,7 @@ const migrations = [
     "0011_fix_oauth_hook_subject_binding.sql",
     "0012_privy_financial_sessions.sql",
     "0013_webauthn_financial_roots.sql",
+    "0014_webauthn_wallet_provisioning.sql",
 ];
 const migrationsDirectory = join(workspaceRoot(), "packages", "db", "migrations");
 await withDatabase(async (database) => {

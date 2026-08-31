@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { type FinancialService, spendingPolicySchema } from "./finance.js";
+import {
+  financialWebAuthnAuthenticationResponseSchema,
+  financialWebAuthnRegistrationResponseSchema,
+  type FinancialService,
+  spendingPolicySchema,
+} from "./finance.js";
 import { hashSchema } from "./finance-protocol.js";
 import type { FinancialActor } from "./finance-types.js";
 import { requestServiceSchema, submitResultSchema } from "./schemas.js";
@@ -19,8 +24,17 @@ export const financialInputs = {
   revoke_financial_session: company,
   prepare_financial_session: company,
   prepare_financial_identity: company,
-  connect_wallet: company.extend({
-    walletProofToken: z.string().min(1).max(200),
+  provision_financial_wallet: company,
+  begin_financial_passkey_registration: company,
+  complete_financial_passkey_registration: company.extend({
+    response: financialWebAuthnRegistrationResponseSchema,
+  }),
+  begin_financial_recovery_authorization: company,
+  authorize_financial_recovery: company.extend({
+    response: financialWebAuthnAuthenticationResponseSchema,
+  }),
+  complete_financial_recovery_registration: company.extend({
+    response: financialWebAuthnRegistrationResponseSchema,
   }),
   register_financial_session: company.extend({
     authorizationRef: z.uuid(),
@@ -120,9 +134,42 @@ export async function runFinancialCommand(
       );
     case "prepare_financial_identity":
       return f.prepareFinancialIdentity(a, company.parse(raw).companyId, key);
-    case "connect_wallet": {
-      const p = financialInputs.connect_wallet.parse(raw);
-      return f.createWallet(a, p.companyId, p.walletProofToken, key);
+    case "provision_financial_wallet":
+      return f.provisionFinancialWallet(a, company.parse(raw).companyId, key);
+    case "begin_financial_passkey_registration":
+      return f.beginPasskeyRegistration(
+        a,
+        company.parse(raw).companyId,
+        "primary",
+        key,
+      );
+    case "complete_financial_passkey_registration": {
+      const p =
+        financialInputs.complete_financial_passkey_registration.parse(raw);
+      return f.completePasskeyRegistration(
+        a,
+        p.companyId,
+        "primary",
+        p.response,
+        key,
+      );
+    }
+    case "begin_financial_recovery_authorization":
+      return f.beginRecoveryAuthorization(a, company.parse(raw).companyId, key);
+    case "authorize_financial_recovery": {
+      const p = financialInputs.authorize_financial_recovery.parse(raw);
+      return f.authorizeRecoveryRegistration(a, p.companyId, p.response, key);
+    }
+    case "complete_financial_recovery_registration": {
+      const p =
+        financialInputs.complete_financial_recovery_registration.parse(raw);
+      return f.completePasskeyRegistration(
+        a,
+        p.companyId,
+        "recovery",
+        p.response,
+        key,
+      );
     }
     case "register_financial_session":
       return f.registerSession(

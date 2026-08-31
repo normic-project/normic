@@ -555,7 +555,12 @@ export const financialWallets = pgTable("financial_wallets", {
     .references(() => agents.id),
   address: text("address").notNull().unique(),
   ownerAddress: text("owner_address").notNull(),
+  rootBindingId: uuid("root_binding_id")
+    .unique()
+    .references(() => financialRootBindings.id),
   chainId: integer("chain_id").notNull(),
+  provider: text("provider").notNull().default("alchemy-wallet-api"),
+  walletType: text("wallet_type").notNull().default("erc4337-sma-b"),
   data: jsonb("data").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()

@@ -82,6 +82,7 @@ export async function validateCustody(env) {
           chain,
           env.ALCHEMY_API_KEY?.trim(),
           custodian,
+          rpc,
         );
         if (wallet.available && wallet.autonomousAvailable)
           status.ALCHEMY_WALLET_API = "PASS";
@@ -93,14 +94,17 @@ export async function validateCustody(env) {
       (async () => {
         if (!appId || !appSecret) return;
         try {
-          const response = await readOnlyFetch("https://api.privy.io/v1/wallets", {
-            method: "GET",
-            headers: {
-              Authorization: `Basic ${Buffer.from(`${appId}:${appSecret}`, "utf8").toString("base64")}`,
-              "privy-app-id": appId,
-              Accept: "application/json",
+          const response = await readOnlyFetch(
+            "https://api.privy.io/v1/wallets",
+            {
+              method: "GET",
+              headers: {
+                Authorization: `Basic ${Buffer.from(`${appId}:${appSecret}`, "utf8").toString("base64")}`,
+                "privy-app-id": appId,
+                Accept: "application/json",
+              },
             },
-          });
+          );
           // HTTP 200 authenticates the app; wallet contents are not needed.
           if (response.status === 200) status.PRIVY_CREDENTIALS = "PASS";
           await response.body?.cancel();

@@ -36,9 +36,10 @@ export type FinancialWallet = {
   agentId: string;
   address: EvmAddress;
   ownerAddress: EvmAddress;
+  rootBindingId?: string | null;
   chainId: 4663;
   provider: "alchemy-wallet-api";
-  walletType: "erc4337-sma-b";
+  walletType: "erc4337-sma-b" | "erc4337-mav2-webauthn";
   authorizationStatus: "owner_verified";
   deployed: boolean;
   createdAt: string;
@@ -70,6 +71,36 @@ export type FinancialWebAuthnCredential = {
   signCount: string;
   createdAt: string;
   revokedAt: string | null;
+};
+export type FinancialWebAuthnChallengePurpose =
+  "register_primary" | "register_recovery" | "root_assertion";
+export type FinancialWebAuthnRegistrationResponse = {
+  id: string;
+  rawId: string;
+  type: "public-key";
+  response: {
+    attestationObject: string;
+    clientDataJSON: string;
+    transports?: string[] | undefined;
+    publicKeyAlgorithm?: number | undefined;
+    publicKey?: string | undefined;
+    authenticatorData?: string | undefined;
+  };
+  clientExtensionResults: Record<string, unknown>;
+  authenticatorAttachment?: string | undefined;
+};
+export type FinancialWebAuthnAuthenticationResponse = {
+  id: string;
+  rawId: string;
+  type: "public-key";
+  response: {
+    authenticatorData: string;
+    clientDataJSON: string;
+    signature: string;
+    userHandle?: string | undefined;
+  };
+  clientExtensionResults: Record<string, unknown>;
+  authenticatorAttachment?: string | undefined;
 };
 export type SpendingPolicy = {
   companyId: string;
@@ -261,9 +292,13 @@ export interface FinancialChainPort {
 export interface FinancialWalletPort {
   readonly available: boolean;
   readonly autonomousAvailable: boolean;
-  requestAccount(
-    ownerAddress: EvmAddress,
-  ): Promise<{ address: EvmAddress; deployed: boolean }>;
+  provisionWebAuthnAccount(input: {
+    credentialId: string;
+    publicKey: EvmHash;
+    rpId: "normic.tech";
+    validationEntityId: 0;
+    salt: "0";
+  }): Promise<{ address: EvmAddress; deployed: boolean }>;
   prepareSession(
     wallet: FinancialWallet,
     policy: SpendingPolicy,
@@ -307,7 +342,37 @@ export interface FinancialRepository {
   lockCompany(companyId: string): Promise<void>;
   lockIndexer(): Promise<void>;
   getRootBinding(companyId: string): Promise<FinancialRootBinding | null>;
+  getRootBindingById(id: string): Promise<FinancialRootBinding | null>;
   saveRootBinding(binding: FinancialRootBinding): Promise<void>;
+  updateRootBinding(binding: FinancialRootBinding): Promise<void>;
+  listWebAuthnCredentials(
+    rootBindingId: string,
+  ): Promise<FinancialWebAuthnCredential[]>;
+  getWebAuthnCredential(
+    credentialId: string,
+    lock?: boolean,
+  ): Promise<FinancialWebAuthnCredential | null>;
+  saveWebAuthnCredential(
+    credential: FinancialWebAuthnCredential,
+  ): Promise<void>;
+  updateWebAuthnSignCount(
+    credentialId: string,
+    signCount: string,
+  ): Promise<void>;
+  createWebAuthnChallenge(input: {
+    id: string;
+    rootBindingId: string;
+    ownerUserId: string;
+    challengeHash: string;
+    purpose: FinancialWebAuthnChallengePurpose;
+    expiresAt: string;
+  }): Promise<void>;
+  consumeWebAuthnChallenge(input: {
+    rootBindingId: string;
+    ownerUserId: string;
+    challengeHash: string;
+    purpose: FinancialWebAuthnChallengePurpose;
+  }): Promise<boolean>;
   listWallets(): Promise<FinancialWallet[]>;
   observeTransfer(
     companyId: string,

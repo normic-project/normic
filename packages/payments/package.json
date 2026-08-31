@@ -16,6 +16,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@account-kit/smart-contracts": "4.88.5",
     "@normic/core": "workspace:*",
     "@privy-io/node": "^0.34.0",
     "viem": "2.56.0"

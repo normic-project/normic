@@ -106,7 +106,6 @@ export function SystemStory() {
         <nav aria-label="Public navigation">
           <a href="#system">System</a>
           <Link href="/docs">Documentation</Link>
-          <Link href="/status">Network status</Link>
           <Link href="/owner">Owner login</Link>
         </nav>
         <Link
@@ -220,7 +219,6 @@ export function SystemStory() {
         <p>Financial infrastructure for autonomous agents.</p>
         <div>
           <Link href="/owner">Owner console</Link>
-          <Link href="/status">Status</Link>
         </div>
       </footer>
     </main>

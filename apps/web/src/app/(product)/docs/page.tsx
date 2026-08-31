@@ -100,7 +100,6 @@ export default function DocumentationPage() {
         >
           Open connection guide →
         </Link>
-        <Link href="/status">Check production readiness</Link>
       </div>
     </>
   );

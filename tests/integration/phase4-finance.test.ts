@@ -162,7 +162,10 @@ describe("Phase 4 isolated financial integration", () => {
     wallets = {
       available: true,
       autonomousAvailable: true,
-      requestAccount: async () => ({ address: address(1), deployed: true }),
+      provisionWebAuthnAccount: async () => ({
+        address: address(1),
+        deployed: true,
+      }),
       prepareSession: async () => ({
         publicKey: address(21),
         providerSessionId: "isolated-prepared-session",

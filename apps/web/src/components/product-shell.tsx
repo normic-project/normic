@@ -1,10 +1,4 @@
-import {
-  Activity,
-  Cable,
-  CircleGauge,
-  BookOpenText,
-  ShieldCheck,
-} from "lucide-react";
+import { Activity, Cable, BookOpenText, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { Brand } from "./brand";
 
@@ -13,7 +7,6 @@ const navigation = [
   { href: "/connect", label: "Connect", icon: Cable },
   { href: "/docs", label: "Documentation", icon: BookOpenText },
   { href: "/activity", label: "Audit", icon: Activity },
-  { href: "/status", label: "Status", icon: CircleGauge },
 ];
 export function ProductShell({
   children,
@@ -30,20 +23,6 @@ export function ProductShell({
             </Link>
           ))}
         </nav>
-        <div className="network-note">
-          <span className="status-dot" />
-          <div>
-            <strong>Market connectivity</strong>
-            <small>
-              Production ·{" "}
-              {process.env.NORMIC_FINANCIAL_EXECUTION_ENABLED === "true"
-                ? "financial configuration requested"
-                : process.env.ROBINHOOD_MAINNET_ENABLED === "true"
-                  ? "market reads · payments blocked"
-                  : "integration inactive"}
-            </small>
-          </div>
-        </div>
       </aside>
       <div className="app-stage">
         <header className="app-topbar">

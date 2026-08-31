@@ -4,6 +4,7 @@ packages:
 
 allowBuilds:
   bufferutil: false
+  es5-ext: false
   esbuild: true
   sharp: true
   unrs-resolver: true

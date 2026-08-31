@@ -1,4 +1,6 @@
 import {
+  defineChain,
+  http,
   toFunctionSelector,
   decodeFunctionData,
   verifyMessage,
@@ -6,6 +8,12 @@ import {
   toHex,
   type Hex,
 } from "viem";
+import { entryPoint07Address } from "viem/account-abstraction";
+import {
+  createModularAccountV2,
+  predictModularAccountV2Address,
+} from "@account-kit/smart-contracts";
+import { accountFactoryAbi } from "@account-kit/smart-contracts/experimental";
 import {
   CANONICAL_USDG,
   FINANCIAL_CHAIN_ID,
@@ -66,6 +74,14 @@ const signatures = {
   dispute: "dispute(bytes32)",
   refund: "refund(bytes32)",
 } as const;
+const WEBAUTHN_MAV2_FACTORY =
+  "0x55010E571dCf07e254994bfc88b9C1C8FAe31960" as const;
+const WEBAUTHN_VALIDATION_MODULE =
+  "0x0000000000001D9d34E07D9834274dF9ae575217" as const;
+// Account Kit 4.88.5 getDefaultMAV2Address; the WebAuthn factory uses MA,
+// not EOA-based SMA bytecode. Never label this root as a Privy/EOA SMA.
+const WEBAUTHN_MAV2_IMPLEMENTATION =
+  "0x00000000000002377B26b1EdA7b0BC371C60DD4f";
 export function sessionSelectors(policy: SpendingPolicy): Hex[] {
   return [
     ...new Set(
@@ -105,8 +121,9 @@ export class AlchemyFinancialWallet implements FinancialWalletPort {
     private readonly chain: RobinhoodFinancialChain,
     private readonly apiKey?: string,
     private readonly custodian?: SessionCustodian,
+    private readonly rpcUrl?: string,
   ) {
-    this.available = !!apiKey;
+    this.available = !!apiKey && !!rpcUrl;
     this.autonomousAvailable = !!apiKey && !!custodian;
   }
   private async request(method: string, params: unknown[]): Promise<unknown> {
@@ -145,24 +162,146 @@ export class AlchemyFinancialWallet implements FinancialWalletPort {
       );
     }
   }
-  async requestAccount(ownerAddress: EvmAddress) {
-    await this.chain.validateChain();
-    const result = (await this.request("wallet_requestAccount", [
-      { signerAddress: ownerAddress, creationHint: { accountType: "sma-b" } },
-    ])) as { accountAddress?: unknown };
-    const address = addressSchema.parse(result.accountAddress);
-    if (address === ownerAddress.toLowerCase())
-      throw new Error(
-        "An independent ERC-4337 account is required, not owner EIP-7702 delegation.",
+  async provisionWebAuthnAccount(input: {
+    credentialId: string;
+    publicKey: Hex;
+    rpId: "normic.tech";
+    validationEntityId: 0;
+    salt: "0";
+  }) {
+    if (!this.rpcUrl || !this.apiKey)
+      throw new DomainError(
+        "Alchemy wallet infrastructure is not configured.",
+        "FINANCIAL_UNAVAILABLE",
       );
-    const code = await this.chain.client!.getCode({ address });
-    return { address, deployed: !!code && code !== "0x" };
+    await this.chain.validateChain();
+    if (
+      input.rpId !== "normic.tech" ||
+      input.validationEntityId !== 0 ||
+      input.salt !== "0" ||
+      !/^0x[0-9a-fA-F]{128}$/.test(input.publicKey) ||
+      !/^[A-Za-z0-9_-]{1,4096}$/.test(input.credentialId)
+    )
+      throw new PolicyDeniedError("Invalid WebAuthn MAv2 root parameters.");
+    const client = this.chain.client!;
+    const [factoryCode, validationCode, entryPointCode] = await Promise.all([
+      client.getCode({ address: WEBAUTHN_MAV2_FACTORY }),
+      client.getCode({ address: WEBAUTHN_VALIDATION_MODULE }),
+      client.getCode({ address: entryPoint07Address }),
+    ]);
+    if (
+      !factoryCode ||
+      factoryCode === "0x" ||
+      !validationCode ||
+      validationCode === "0x" ||
+      !entryPointCode ||
+      entryPointCode === "0x"
+    )
+      throw new DomainError(
+        "Required MAv2 WebAuthn contracts are unavailable on Robinhood Mainnet.",
+        "FINANCIAL_UNAVAILABLE",
+      );
+    try {
+      const [entryPoint, validationModule, implementation] = await Promise.all([
+        client.readContract({
+          address: WEBAUTHN_MAV2_FACTORY,
+          abi: accountFactoryAbi,
+          functionName: "ENTRY_POINT",
+        }),
+        client.readContract({
+          address: WEBAUTHN_MAV2_FACTORY,
+          abi: accountFactoryAbi,
+          functionName: "WEBAUTHN_VALIDATION_MODULE",
+        }),
+        client.readContract({
+          address: WEBAUTHN_MAV2_FACTORY,
+          abi: accountFactoryAbi,
+          functionName: "ACCOUNT_IMPL",
+        }),
+      ]);
+      if (
+        entryPoint.toLowerCase() !== entryPoint07Address.toLowerCase() ||
+        validationModule.toLowerCase() !==
+          WEBAUTHN_VALIDATION_MODULE.toLowerCase() ||
+        implementation.toLowerCase() !==
+          WEBAUTHN_MAV2_IMPLEMENTATION.toLowerCase()
+      )
+        throw new Error("Invalid WebAuthn factory configuration.");
+      const implementationCode = await client.getCode({
+        address: implementation,
+      });
+      if (!implementationCode || implementationCode === "0x")
+        throw new Error("Missing MAv2 implementation.");
+      const ownerPublicKey = {
+        x: BigInt(input.publicKey.slice(0, 66)),
+        y: BigInt(`0x${input.publicKey.slice(66)}`),
+      };
+      const predicted = predictModularAccountV2Address({
+        type: "WebAuthn",
+        factoryAddress: WEBAUTHN_MAV2_FACTORY,
+        implementationAddress: implementation,
+        ownerPublicKey,
+        salt: 0n,
+        entityId: 0,
+      });
+      const factoryAddress = await client.readContract({
+        address: WEBAUTHN_MAV2_FACTORY,
+        abi: accountFactoryAbi,
+        functionName: "getAddressWebAuthn",
+        args: [ownerPublicKey.x, ownerPublicKey.y, 0n, 0],
+      });
+      if (predicted.toLowerCase() !== factoryAddress.toLowerCase())
+        throw new Error("WebAuthn address derivation mismatch.");
+      const robinhoodMainnet = defineChain({
+        id: FINANCIAL_CHAIN_ID,
+        name: "Robinhood Chain Mainnet",
+        nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+        rpcUrls: { default: { http: [this.rpcUrl] } },
+      });
+      const account = await createModularAccountV2({
+        mode: "webauthn",
+        chain: robinhoodMainnet,
+        transport: http(this.rpcUrl, { retryCount: 0, timeout: 10_000 }),
+        credential: {
+          id: input.credentialId,
+          publicKey: input.publicKey,
+        },
+        rpId: input.rpId,
+        // The server receives public metadata only. It cannot perform a root ceremony.
+        getFn: async () => {
+          throw new PolicyDeniedError(
+            "Root signing requires the owner's passkey device.",
+          );
+        },
+        accountAddress: factoryAddress,
+        salt: 0n,
+        factoryAddress: WEBAUTHN_MAV2_FACTORY,
+        signerEntity: { isGlobalValidation: true, entityId: 0 },
+      });
+      const address = addressSchema.parse(account.address);
+      if (address !== predicted.toLowerCase())
+        throw new Error("WebAuthn account mismatch.");
+      const code = await client.getCode({ address });
+      return { address, deployed: !!code && code !== "0x" };
+    } catch (error) {
+      if (error instanceof DomainError || error instanceof PolicyDeniedError)
+        throw error;
+      throw new DomainError(
+        "Alchemy could not derive the WebAuthn MAv2 account.",
+        "FINANCIAL_UNAVAILABLE",
+      );
+    }
   }
   async prepareSession(
     wallet: FinancialWallet,
     policy: SpendingPolicy,
     idempotencyKey: string,
   ) {
+    if (wallet.rootBindingId)
+      throw new DomainError(
+        "This WebAuthn root must explicitly authorize onchain session installation with its passkey. EOA session authorization is not permitted.",
+        "OWNER_ACTION_REQUIRED",
+      );
     if (!this.custodian)
       throw new DomainError(
         "A reviewed secure session custodian integration is required.",
@@ -183,7 +322,10 @@ export class AlchemyFinancialWallet implements FinancialWalletPort {
       policyVersion: policy.version,
       idempotencyKey,
     });
-    if (publicKey.toLowerCase() === wallet.ownerAddress.toLowerCase())
+    if (
+      wallet.ownerAddress &&
+      publicKey.toLowerCase() === wallet.ownerAddress.toLowerCase()
+    )
       throw new PolicyDeniedError("The session key cannot be the owner key.");
     const result = (await this.request("wallet_createSession", [
       {

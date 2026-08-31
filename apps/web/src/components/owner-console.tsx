@@ -658,6 +658,11 @@ export function OwnerConsole({
                 {identity.company.name} · owner-authorized internal identity for
                 an external MCP client.
               </p>
+              {mcpAuthenticated ? (
+                <Link className="button" href="/wallet">
+                  Your Normic wallet
+                </Link>
+              ) : null}
             </div>
             <div className="owner-data-grid">
               <div>

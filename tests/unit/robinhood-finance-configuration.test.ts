@@ -5,7 +5,7 @@ import { RobinhoodFinancialChain } from "@normic/payments";
 describe("Robinhood financial configuration", () => {
   it("keeps owner configuration available while execution stays gated", () => {
     for (const command of [
-      "connect_wallet",
+      "begin_financial_passkey_registration",
       "prepare_financial_session",
       "register_financial_session",
     ] as const)

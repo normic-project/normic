@@ -135,13 +135,6 @@ select {
   letter-spacing: 0.12em;
   text-transform: uppercase;
 }
-.status-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #79a51c;
-  box-shadow: 0 0 0 4px rgba(121, 165, 28, 0.14);
-}
 .hero h1,
 .page-head h1,
 .detail-hero h1 {
@@ -298,25 +291,6 @@ select {
 .app-nav nav a:hover {
   background: #26372f;
   color: #fff;
-}
-.network-note {
-  margin-top: auto;
-  padding: 15px;
-  display: flex;
-  gap: 11px;
-  align-items: center;
-  background: #22332b;
-}
-.network-note div {
-  display: grid;
-  gap: 4px;
-}
-.network-note strong {
-  font-size: 10px;
-}
-.network-note small {
-  color: #9eada4;
-  font-size: 8px;
 }
 .app-stage {
   min-width: 0;
@@ -916,13 +890,11 @@ select {
   .app-nav {
     padding: 24px 11px;
   }
-  .app-nav nav span,
-  .network-note div {
+  .app-nav nav span {
     display: none;
   }
   .app-nav .brand,
-  .app-nav nav a,
-  .network-note {
+  .app-nav nav a {
     justify-content: center;
   }
   .card-grid,
@@ -978,9 +950,6 @@ select {
     display: flex;
     min-width: 36px;
     padding: 0 8px;
-  }
-  .network-note {
-    display: none;
   }
   .app-topbar {
     padding: 0 16px;
@@ -1987,18 +1956,6 @@ select {
 .app-nav nav a:hover {
   background: #002b00;
   opacity: 1;
-}
-.app-shell .status-dot {
-  background: #002b00;
-  box-shadow: 0 0 0 4px color-mix(in srgb, #002b00 18%, transparent);
-}
-.network-note {
-  background: #002b00;
-  border-radius: 18px;
-}
-.network-note small {
-  color: #f2f3ee;
-  opacity: 0.64;
 }
 .app-topbar {
   background: #f2f3ee;

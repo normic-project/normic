@@ -388,8 +388,10 @@ export function createNormicMcpHandler(
       for (const [name, schema] of Object.entries(financialInputs)) {
         if (
           existing.has(name) ||
-          name === "connect_wallet" ||
-          name === "prepare_financial_identity"
+          name === "prepare_financial_identity" ||
+          name === "provision_financial_wallet" ||
+          name.includes("financial_passkey") ||
+          name.includes("financial_recovery")
         )
           continue;
         const command = name as FinancialCommand,

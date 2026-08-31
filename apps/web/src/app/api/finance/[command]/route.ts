@@ -13,6 +13,7 @@ import {
 } from "@normic/core";
 import { getRuntime } from "@/lib/economy";
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ command: string }> },
@@ -29,7 +30,7 @@ export async function POST(
       throw new AuthenticationError(
         "Cross-origin financial requests are not allowed.",
       );
-    const { finance, repository } = await getRuntime(),
+    const { finance, repository, database } = await getRuntime(),
       { command } = await params;
     const rate = await repository.consumeRateLimit({
       bucket: "web-financial-requests",
@@ -91,6 +92,14 @@ export async function POST(
           issuer,
           audience,
           jwksUrl,
+          ownerIdentityResolver: async (owner) => {
+            const [user] = await database.query<{ verified: boolean }>(
+              `SELECT EXISTS (SELECT 1 FROM auth.users WHERE id=$1
+               AND email_confirmed_at IS NOT NULL AND lower(email)=lower($2)) AS verified`,
+              [owner.subject, owner.email],
+            );
+            return user?.verified === true;
+          },
         }).verifyOwner(token),
       };
     } else if (token.startsWith("nmh_"))

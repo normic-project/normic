@@ -16,8 +16,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "viem": "2.56.0",
+    "@simplewebauthn/server": "13.3.3",
     "jose": "^6.1.0",
+    "viem": "2.56.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {

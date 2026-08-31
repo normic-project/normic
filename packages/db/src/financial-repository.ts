@@ -7,6 +7,8 @@ import {
   type FinancialRepository,
   type FinancialWallet,
   type FinancialRootBinding,
+  type FinancialWebAuthnCredential,
+  type FinancialWebAuthnChallengePurpose,
   type SpendingPolicy,
   type FinancialSession,
   type FinancialSessionAuthorization,
@@ -49,6 +51,12 @@ export class PostgresFinancialRepository implements FinancialRepository {
       [companyId],
     );
   }
+  getRootBindingById(id: string) {
+    return this.data<FinancialRootBinding>(
+      "SELECT data FROM financial_root_bindings WHERE id=$1",
+      [id],
+    );
+  }
   async saveRootBinding(binding: FinancialRootBinding) {
     await this.db.query(
       "INSERT INTO financial_root_bindings(id,company_id,owner_user_id,chain_id,root_type,status,root_identity,smart_account_address,account_salt,data,created_at,updated_at) VALUES($1,$2,$3,4663,'webauthn-mav2',$4,$5,$6,0,$7::jsonb,$8,$9)",
@@ -64,6 +72,112 @@ export class PostgresFinancialRepository implements FinancialRepository {
         binding.updatedAt,
       ],
     );
+  }
+  async updateRootBinding(binding: FinancialRootBinding) {
+    await this.db.query(
+      "UPDATE financial_root_bindings SET status=$2,root_identity=$3,smart_account_address=$4,data=$5::jsonb WHERE id=$1",
+      [
+        binding.id,
+        binding.status,
+        binding.rootIdentity,
+        binding.smartAccountAddress?.toLowerCase() ?? null,
+        JSON.stringify(binding),
+      ],
+    );
+  }
+  async listWebAuthnCredentials(rootBindingId: string) {
+    return this.db.query<FinancialWebAuthnCredential>(
+      `SELECT id,root_binding_id AS "rootBindingId",credential_id AS "credentialId",
+       public_key_x AS "publicKeyX",public_key_y AS "publicKeyY",
+       algorithm,rp_id AS "rpId",transports,
+       validation_entity_id AS "validationEntityId",purpose,sign_count::text AS "signCount",
+       created_at::text AS "createdAt",revoked_at::text AS "revokedAt"
+       FROM financial_webauthn_credentials WHERE root_binding_id=$1 ORDER BY created_at`,
+      [rootBindingId],
+    );
+  }
+  async getWebAuthnCredential(credentialId: string, lock = false) {
+    const [credential] = await this.db.query<FinancialWebAuthnCredential>(
+      `SELECT id,root_binding_id AS "rootBindingId",credential_id AS "credentialId",
+       public_key_x AS "publicKeyX",public_key_y AS "publicKeyY",
+       algorithm,rp_id AS "rpId",transports,
+       validation_entity_id AS "validationEntityId",purpose,sign_count::text AS "signCount",
+       created_at::text AS "createdAt",revoked_at::text AS "revokedAt"
+       FROM financial_webauthn_credentials WHERE credential_id=$1${lock ? " FOR UPDATE" : ""}`,
+      [credentialId],
+    );
+    return credential ?? null;
+  }
+  async saveWebAuthnCredential(credential: FinancialWebAuthnCredential) {
+    await this.db.query(
+      `INSERT INTO financial_webauthn_credentials(
+       id,root_binding_id,credential_id,public_key_x,public_key_y,
+       algorithm,rp_id,transports,validation_entity_id,purpose,sign_count,created_at,revoked_at
+       ) VALUES($1,$2,$3,$4,$5,-7,$6,$7::jsonb,$8,$9,$10,$11,$12)`,
+      [
+        credential.id,
+        credential.rootBindingId,
+        credential.credentialId,
+        credential.publicKeyX,
+        credential.publicKeyY,
+        credential.rpId,
+        JSON.stringify(credential.transports),
+        credential.validationEntityId,
+        credential.purpose,
+        credential.signCount,
+        credential.createdAt,
+        credential.revokedAt,
+      ],
+    );
+  }
+  async updateWebAuthnSignCount(credentialId: string, signCount: string) {
+    await this.db.query(
+      "UPDATE financial_webauthn_credentials SET sign_count=$2 WHERE credential_id=$1 AND sign_count<=$2",
+      [credentialId, signCount],
+    );
+  }
+  async createWebAuthnChallenge(input: {
+    id: string;
+    rootBindingId: string;
+    ownerUserId: string;
+    challengeHash: string;
+    purpose: FinancialWebAuthnChallengePurpose;
+    expiresAt: string;
+  }) {
+    await this.db.query(
+      "UPDATE financial_webauthn_challenges SET consumed_at=now() WHERE root_binding_id=$1 AND purpose=$2 AND consumed_at IS NULL",
+      [input.rootBindingId, input.purpose],
+    );
+    await this.db.query(
+      "INSERT INTO financial_webauthn_challenges(id,root_binding_id,owner_user_id,challenge_hash,purpose,expires_at) VALUES($1,$2,$3,$4,$5,$6)",
+      [
+        input.id,
+        input.rootBindingId,
+        input.ownerUserId,
+        input.challengeHash,
+        input.purpose,
+        input.expiresAt,
+      ],
+    );
+  }
+  async consumeWebAuthnChallenge(input: {
+    rootBindingId: string;
+    ownerUserId: string;
+    challengeHash: string;
+    purpose: FinancialWebAuthnChallengePurpose;
+  }) {
+    const rows = await this.db.query(
+      `UPDATE financial_webauthn_challenges SET consumed_at=now()
+       WHERE root_binding_id=$1 AND owner_user_id=$2 AND challenge_hash=$3 AND purpose=$4
+         AND consumed_at IS NULL AND expires_at>now() RETURNING id`,
+      [
+        input.rootBindingId,
+        input.ownerUserId,
+        input.challengeHash,
+        input.purpose,
+      ],
+    );
+    return rows.length === 1;
   }
   async listWallets() {
     return (
@@ -146,12 +260,14 @@ export class PostgresFinancialRepository implements FinancialRepository {
   }
   async saveWallet(w: FinancialWallet) {
     await this.db.query(
-      "INSERT INTO financial_wallets(company_id,agent_id,address,owner_address,chain_id,data) VALUES($1,$2,$3,$4,4663,$5::jsonb)",
+      "INSERT INTO financial_wallets(company_id,agent_id,address,owner_address,root_binding_id,chain_id,provider,wallet_type,data) VALUES($1,$2,$3,$4,$5,4663,'alchemy-wallet-api',$6,$7::jsonb)",
       [
         w.companyId,
         w.agentId,
         w.address.toLowerCase(),
         w.ownerAddress.toLowerCase(),
+        w.rootBindingId ?? null,
+        w.walletType,
         JSON.stringify(w),
       ],
     );
