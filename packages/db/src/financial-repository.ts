@@ -6,6 +6,7 @@ import {
   type EvmAddress,
   type FinancialRepository,
   type FinancialWallet,
+  type FinancialRootBinding,
   type SpendingPolicy,
   type FinancialSession,
   type FinancialSessionAuthorization,
@@ -40,6 +41,28 @@ export class PostgresFinancialRepository implements FinancialRepository {
   async lockIndexer() {
     await this.db.query(
       "SELECT id FROM financial_indexer_lock WHERE id=1 FOR UPDATE",
+    );
+  }
+  getRootBinding(companyId: string) {
+    return this.data<FinancialRootBinding>(
+      "SELECT data FROM financial_root_bindings WHERE company_id=$1",
+      [companyId],
+    );
+  }
+  async saveRootBinding(binding: FinancialRootBinding) {
+    await this.db.query(
+      "INSERT INTO financial_root_bindings(id,company_id,owner_user_id,chain_id,root_type,status,root_identity,smart_account_address,account_salt,data,created_at,updated_at) VALUES($1,$2,$3,4663,'webauthn-mav2',$4,$5,$6,0,$7::jsonb,$8,$9)",
+      [
+        binding.id,
+        binding.companyId,
+        binding.ownerUserId,
+        binding.status,
+        binding.rootIdentity,
+        binding.smartAccountAddress,
+        JSON.stringify(binding),
+        binding.createdAt,
+        binding.updatedAt,
+      ],
     );
   }
   async listWallets() {

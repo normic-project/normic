@@ -43,6 +43,34 @@ export type FinancialWallet = {
   deployed: boolean;
   createdAt: string;
 };
+export type FinancialRootBinding = {
+  id: string;
+  companyId: string;
+  ownerUserId: string;
+  chainId: 4663;
+  rootType: "webauthn-mav2";
+  status: "pending_passkey" | "passkey_verified" | "provisioned" | "revoked";
+  rootIdentity: `webauthn-p256:${string}` | null;
+  smartAccountAddress: EvmAddress | null;
+  accountSalt: "0";
+  createdAt: string;
+  updatedAt: string;
+};
+export type FinancialWebAuthnCredential = {
+  id: string;
+  rootBindingId: string;
+  credentialId: string;
+  publicKeyX: string;
+  publicKeyY: string;
+  algorithm: -7;
+  rpId: string;
+  transports: string[];
+  validationEntityId: number;
+  purpose: "primary" | "recovery";
+  signCount: string;
+  createdAt: string;
+  revokedAt: string | null;
+};
 export type SpendingPolicy = {
   companyId: string;
   enabled: boolean;
@@ -193,7 +221,9 @@ export type FinanceCapabilities = {
 export interface FinancialChainPort {
   capabilities(): FinanceCapabilities;
   validateToken(): Promise<TokenMetadata>;
-  validateEscrow(): Promise<{ address: EvmAddress; maxPayment: string }>;
+  validateEscrow(options?: {
+    requireExecution?: boolean;
+  }): Promise<{ address: EvmAddress; maxPayment: string }>;
   balances(address: EvmAddress): Promise<WalletBalances>;
   validateChain(): Promise<void>;
   verifyCheckpoint(block: string, hash: EvmHash): Promise<void>;
@@ -276,6 +306,8 @@ export interface FinancialRepository {
   ): Promise<T>;
   lockCompany(companyId: string): Promise<void>;
   lockIndexer(): Promise<void>;
+  getRootBinding(companyId: string): Promise<FinancialRootBinding | null>;
+  saveRootBinding(binding: FinancialRootBinding): Promise<void>;
   listWallets(): Promise<FinancialWallet[]>;
   observeTransfer(
     companyId: string,

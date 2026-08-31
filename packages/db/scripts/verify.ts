@@ -20,6 +20,7 @@ await withDatabase(async (database) => {
     active_terminal_reservations: number;
     unsafe_mandates: number;
     invalid_oauth_grants: number;
+    invalid_financial_roots: number;
   }>(`
     SELECT
       (SELECT count(*)::int FROM companies) companies,
@@ -75,7 +76,15 @@ await withDatabase(async (database) => {
          c.id IS NULL OR c.agent_id<>g.agent_id OR
          c.issuer<>u.auth_issuer OR c.audience<>oc.audience OR
          c.revoked_at IS NOT NULL OR (c.expires_at IS NOT NULL AND c.expires_at<=now())
-       )) invalid_oauth_grants
+       )) invalid_oauth_grants,
+      (SELECT count(*)::int
+       FROM financial_root_bindings r
+       LEFT JOIN companies c ON c.id=r.company_id
+       WHERE c.id IS NULL OR c.owner_user_id<>r.owner_user_id OR
+         r.chain_id<>4663 OR r.root_type<>'webauthn-mav2' OR
+         (r.status IN ('passkey_verified','provisioned') AND r.root_identity IS NULL) OR
+         (r.status='provisioned' AND r.smart_account_address IS NULL)
+      ) invalid_financial_roots
   `);
   if (
     !checks ||
@@ -92,7 +101,8 @@ await withDatabase(async (database) => {
     checks.missing_action_history ||
     checks.active_terminal_reservations ||
     checks.unsafe_mandates ||
-    checks.invalid_oauth_grants
+    checks.invalid_oauth_grants ||
+    checks.invalid_financial_roots
   ) {
     throw new Error(
       `Phase 6 database verification failed: ${JSON.stringify(checks)}`,

@@ -9,6 +9,7 @@ const company = z.object({ companyId: z.uuid() }).strict(),
   invocation = z.object({ invocationId: z.uuid() }).strict();
 export const financialInputs = {
   get_financial_capabilities: z.object({}).strict(),
+  get_financial_identity: company,
   get_wallet: company,
   get_balance: company,
   get_spending_policy: company,
@@ -17,6 +18,7 @@ export const financialInputs = {
   update_spending_policy: spendingPolicySchema,
   revoke_financial_session: company,
   prepare_financial_session: company,
+  prepare_financial_identity: company,
   connect_wallet: company.extend({
     walletProofToken: z.string().min(1).max(200),
   }),
@@ -65,9 +67,6 @@ export const financialCommandRequiresReadyCapability = (
   name: FinancialCommand,
 ) =>
   [
-    "connect_wallet",
-    "prepare_financial_session",
-    "register_financial_session",
     "fund_service",
     "accept_result",
     "dispute_result",
@@ -93,6 +92,8 @@ export async function runFinancialCommand(
   switch (name) {
     case "get_financial_capabilities":
       return f.capabilities();
+    case "get_financial_identity":
+      return f.getFinancialIdentity(a, company.parse(raw).companyId);
     case "get_wallet":
       return f.getWallet(a, company.parse(raw).companyId);
     case "get_balance":
@@ -117,6 +118,8 @@ export async function runFinancialCommand(
         company.parse(raw).companyId,
         key,
       );
+    case "prepare_financial_identity":
+      return f.prepareFinancialIdentity(a, company.parse(raw).companyId, key);
     case "connect_wallet": {
       const p = financialInputs.connect_wallet.parse(raw);
       return f.createWallet(a, p.companyId, p.walletProofToken, key);

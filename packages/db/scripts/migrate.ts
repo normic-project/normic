@@ -14,6 +14,8 @@ const migrations = [
   "0009_supabase_oauth_hook.sql",
   "0010_dynamic_mcp_oauth_clients.sql",
   "0011_fix_oauth_hook_subject_binding.sql",
+  "0012_privy_financial_sessions.sql",
+  "0013_webauthn_financial_roots.sql",
 ];
 const migrationsDirectory = join(
   workspaceRoot(),

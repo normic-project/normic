@@ -49,7 +49,7 @@ export class RobinhoodFinancialChain implements FinancialChainPort {
         })
       : null;
   }
-  capabilities(): FinanceCapabilities {
+  private deploymentConfigurationMissing() {
     const required = [
       "ROBINHOOD_RPC_URL",
       "NORMIC_ESCROW_ADDRESS",
@@ -59,7 +59,10 @@ export class RobinhoodFinancialChain implements FinancialChainPort {
       "DISPUTE_RESOLVER_ADDRESS",
       "NORMIC_ESCROW_DEPLOYMENT_BLOCK",
     ];
-    const missing = required.filter((k) => !this.env[k]);
+    return required.filter((k) => !this.env[k]);
+  }
+  capabilities(): FinanceCapabilities {
+    const missing = this.deploymentConfigurationMissing();
     if (this.env.NORMIC_FINANCIAL_EXECUTION_ENABLED !== "true")
       missing.push("NORMIC_FINANCIAL_EXECUTION_ENABLED=true");
     if (
@@ -133,8 +136,12 @@ export class RobinhoodFinancialChain implements FinancialChainPort {
       source: "robinhood-mainnet-rpc/finalized",
     };
   }
-  async validateEscrow() {
-    if (this.capabilities().state !== "ready")
+  async validateEscrow(options: { requireExecution?: boolean } = {}) {
+    const missing =
+      options.requireExecution === false
+        ? this.deploymentConfigurationMissing()
+        : this.capabilities().missing;
+    if (missing.length)
       throw new DomainError(
         "Financial execution is blocked by missing deployment configuration.",
         "FINANCIAL_UNAVAILABLE",

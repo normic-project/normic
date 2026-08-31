@@ -561,6 +561,74 @@ export const financialWallets = pgTable("financial_wallets", {
     .notNull()
     .defaultNow(),
 });
+export const financialRootBindings = pgTable("financial_root_bindings", {
+  id: uuid("id").primaryKey(),
+  companyId: uuid("company_id")
+    .notNull()
+    .unique()
+    .references(() => companies.id),
+  ownerUserId: uuid("owner_user_id")
+    .notNull()
+    .references(() => users.id),
+  chainId: integer("chain_id").notNull(),
+  rootType: text("root_type").notNull(),
+  status: text("status").notNull(),
+  rootIdentity: text("root_identity").unique(),
+  smartAccountAddress: text("smart_account_address").unique(),
+  accountSalt: numeric("account_salt", { precision: 78, scale: 0 })
+    .notNull()
+    .default("0"),
+  data: jsonb("data").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+export const financialWebauthnCredentials = pgTable(
+  "financial_webauthn_credentials",
+  {
+    id: uuid("id").primaryKey(),
+    rootBindingId: uuid("root_binding_id")
+      .notNull()
+      .references(() => financialRootBindings.id),
+    credentialId: text("credential_id").notNull().unique(),
+    publicKeyX: text("public_key_x").notNull(),
+    publicKeyY: text("public_key_y").notNull(),
+    algorithm: integer("algorithm").notNull(),
+    rpId: text("rp_id").notNull(),
+    transports: jsonb("transports").notNull().default([]),
+    validationEntityId: integer("validation_entity_id").notNull(),
+    purpose: text("purpose").notNull(),
+    signCount: numeric("sign_count", { precision: 78, scale: 0 })
+      .notNull()
+      .default("0"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  },
+);
+export const financialWebauthnChallenges = pgTable(
+  "financial_webauthn_challenges",
+  {
+    id: uuid("id").primaryKey(),
+    rootBindingId: uuid("root_binding_id")
+      .notNull()
+      .references(() => financialRootBindings.id),
+    ownerUserId: uuid("owner_user_id")
+      .notNull()
+      .references(() => users.id),
+    challengeHash: text("challenge_hash").notNull(),
+    purpose: text("purpose").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+);
 export const spendingPolicies = pgTable("spending_policies", {
   companyId: uuid("company_id")
     .primaryKey()

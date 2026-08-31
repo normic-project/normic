@@ -17,6 +17,8 @@
     "db:seed": "pnpm --filter @normic/db seed",
     "db:verify": "pnpm --filter @normic/db verify",
     "finance:reconcile": "node --env-file-if-exists=.env scripts/reconcile-finance.mjs",
+    "validate:phase4-custody": "node packages/payments/scripts/validate-custody.mjs",
+    "validate:phase4-canary-authorization": "node --env-file=apps/web/.env.production.local packages/payments/scripts/inspect-canary-authorization.mjs",
     "contracts:build": "pnpm --filter @normic/contracts build",
     "contracts:test": "pnpm --filter @normic/contracts test",
     "contracts:deploy": "pnpm --filter @normic/contracts deploy:mainnet",

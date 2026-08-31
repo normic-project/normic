@@ -13,3 +13,5 @@ coverage/
 .DS_Store
 work/
 outputs/
+.vercel
+.env*

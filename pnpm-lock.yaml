@@ -162,6 +162,9 @@ importers:
         specifier: 5.6.1
         version: 5.6.1
     devDependencies:
+      '@privy-io/node':
+        specifier: ^0.34.0
+        version: 0.34.0(viem@2.56.0(bufferutil@4.0.7)(typescript@6.0.3)(utf-8-validate@6.0.3)(zod@4.4.3))
       ganache:
         specifier: 7.9.2
         version: 7.9.2

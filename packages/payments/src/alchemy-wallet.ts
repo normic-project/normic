@@ -168,7 +168,9 @@ export class AlchemyFinancialWallet implements FinancialWalletPort {
         "A reviewed secure session custodian integration is required.",
         "FINANCIAL_UNAVAILABLE",
       );
-    const escrow = await this.chain.validateEscrow();
+    const escrow = await this.chain.validateEscrow({
+      requireExecution: false,
+    });
     if (
       wallet.chainId !== FINANCIAL_CHAIN_ID ||
       policy.allowedToken.toLowerCase() !== CANONICAL_USDG.toLowerCase() ||
@@ -238,7 +240,9 @@ export class AlchemyFinancialWallet implements FinancialWalletPort {
         "A reviewed secure session custodian integration is required. Autonomous execution is blocked.",
         "FINANCIAL_UNAVAILABLE",
       );
-    const escrow = await this.chain.validateEscrow();
+    const escrow = await this.chain.validateEscrow({
+      requireExecution: false,
+    });
     if (
       !policy.enabled ||
       session.revokedAt ||

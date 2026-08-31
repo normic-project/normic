@@ -37,6 +37,7 @@ import {
   type VerifiedEscrowEvent,
   type FinancialSession,
   type FinancialSessionAuthorization,
+  type FinancialRootBinding,
   type SafeCall,
 } from "./finance-types.js";
 
@@ -216,6 +217,118 @@ export class FinancialService {
     z.uuid().parse(companyId);
     await this.authorize(this.repository, a, companyId);
     return this.repository.getWallet(companyId);
+  }
+  async getFinancialIdentity(a: FinancialActor, companyId: string) {
+    z.uuid().parse(companyId);
+    await this.authorize(this.repository, a, companyId);
+    const [root, wallet] = await Promise.all([
+      this.repository.getRootBinding(companyId),
+      this.repository.getWallet(companyId),
+    ]);
+    return {
+      companyId,
+      chainId: 4663 as const,
+      rootType: "webauthn-mav2" as const,
+      state: root?.status ?? ("uninitialized" as const),
+      passkeyEnrollmentRequired: !root || root.status === "pending_passkey",
+      smartAccountAddress: root?.smartAccountAddress ?? wallet?.address ?? null,
+      counterfactual: wallet ? !wallet.deployed : null,
+    };
+  }
+  async prepareFinancialIdentity(
+    a: FinancialActor,
+    companyId: string,
+    key: string,
+  ) {
+    if (a.kind !== "owner")
+      throw new AuthorizationError(
+        "A verified owner must initialize the financial identity.",
+      );
+    z.uuid().parse(companyId);
+    return this.mutate(
+      a,
+      "financial.root_binding_reserved",
+      key,
+      { companyId, rootType: "webauthn-mav2", chainId: 4663 },
+      companyId,
+      async (r) => {
+        const company = await r.economy.getCompany(companyId),
+          agent = company
+            ? await r.economy.getAgent(company.primaryAgentId)
+            : null;
+        if (!company || !agent || agent.status !== "active")
+          throw new PolicyDeniedError(
+            "Complete verified owner and agent onboarding first.",
+          );
+        const credentials = await r.economy.listCredentials(agent.id);
+        let authenticatedMcpConnection = false;
+        for (const credential of credentials) {
+          if (
+            !credential.lastUsedAt ||
+            credential.revokedAt ||
+            (credential.expiresAt && credential.expiresAt <= new Date())
+          )
+            continue;
+          if (
+            await r.economy.hasDynamicOAuthGrant({
+              audience: credential.audience,
+              ownerSubject: a.owner.subject,
+              agentId: agent.id,
+              credentialId: credential.id,
+            })
+          ) {
+            authenticatedMcpConnection = true;
+            break;
+          }
+        }
+        if (!authenticatedMcpConnection)
+          throw new PolicyDeniedError(
+            "A real authenticated MCP connection is required before financial identity initialization.",
+          );
+        const existing = await r.getRootBinding(companyId);
+        if (existing) {
+          if (
+            existing.ownerUserId !== company.ownerUserId ||
+            existing.rootType !== "webauthn-mav2" ||
+            existing.chainId !== 4663
+          )
+            throw new ConflictError(
+              "The existing financial root binding is invalid.",
+            );
+          return {
+            companyId,
+            chainId: existing.chainId,
+            rootType: existing.rootType,
+            state: existing.status,
+            passkeyEnrollmentRequired: existing.status === "pending_passkey",
+            smartAccountAddress: existing.smartAccountAddress,
+          };
+        }
+        const now = new Date().toISOString(),
+          binding: FinancialRootBinding = {
+            id: randomUUID(),
+            companyId,
+            ownerUserId: company.ownerUserId,
+            chainId: 4663,
+            rootType: "webauthn-mav2",
+            status: "pending_passkey",
+            rootIdentity: null,
+            smartAccountAddress: null,
+            accountSalt: "0",
+            createdAt: now,
+            updatedAt: now,
+          };
+        await r.saveRootBinding(binding);
+        return {
+          companyId,
+          chainId: binding.chainId,
+          rootType: binding.rootType,
+          state: binding.status,
+          passkeyEnrollmentRequired: true,
+          smartAccountAddress: null,
+        };
+      },
+    );
   }
   async getBalance(a: FinancialActor, companyId: string) {
     const w = await this.getWallet(a, companyId);
@@ -434,7 +547,9 @@ export class FinancialService {
       throw new PolicyDeniedError(
         "Invalid token, limits, or session expiration.",
       );
-    const escrow = await this.chain.validateEscrow();
+    const escrow = await this.chain.validateEscrow({
+      requireExecution: false,
+    });
     if (
       p.allowedContract.toLowerCase() !== escrow.address.toLowerCase() ||
       BigInt(p.maxPerTransaction) > BigInt(escrow.maxPayment)

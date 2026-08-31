@@ -101,6 +101,45 @@ async function fixture() {
 }
 
 describe("Privy-backed Alchemy session custody", () => {
+  it("binds the production policy only to canonical USDG and the deployed escrow", () => {
+    const deployedPolicy: SpendingPolicy = {
+      ...policy,
+      allowedContract:
+        "0xda3ea8cd849ff916aa0ee6b1088f151c2fa51c47" as EvmAddress,
+      allowedActions: [
+        "fund",
+        "accept",
+        "submit",
+        "release",
+        "dispute",
+        "refund",
+      ],
+    };
+    const permissions = sessionPermissions(deployedPolicy);
+    expect(permissions).toEqual([
+      {
+        type: "erc20-token-transfer",
+        data: {
+          address: CANONICAL_USDG.toLowerCase(),
+          allowance: "0x4c4b40",
+        },
+      },
+      {
+        type: "functions-on-contract",
+        data: {
+          address: deployedPolicy.allowedContract,
+          functions: sessionSelectors(deployedPolicy),
+        },
+      },
+    ]);
+    expect(sessionSelectors(deployedPolicy)).toHaveLength(6);
+    expect(sessionSelectors(deployedPolicy)).not.toContain("0x095ea7b3");
+    expect(sessionSelectors(deployedPolicy)).not.toContain("0xa9059cbb");
+    expect(JSON.stringify(permissions)).not.toMatch(
+      /root|global|native|deployment|permission-management/i,
+    );
+  });
+
   it("uses only cumulative USDG allowance and exact escrow functions", () => {
     const permissions = sessionPermissions(policy);
     expect(permissions).toEqual([
