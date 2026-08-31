@@ -24,8 +24,10 @@ describe("internal readiness stays out of the owner UI", () => {
       createElement(ProductShell, { children: "Owner dashboard content" }),
     );
     expect(html).toContain("Owner dashboard content");
-    for (const path of ["/owner", "/connect", "/docs", "/activity"])
+    for (const path of ["/owner", "/wallet", "/connect", "/docs", "/activity"])
       expect(html).toContain(`href="${path}"`);
+    expect(html).not.toContain("<aside");
+    expect(html).toContain('aria-label="Open owner menu"');
     for (const removed of [
       'href="/status"',
       "Capability status",

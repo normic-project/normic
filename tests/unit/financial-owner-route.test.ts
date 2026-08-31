@@ -1,13 +1,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { OAuthTokenVerifier } from "@normic/core";
 import { POST } from "../../apps/web/src/app/api/finance/[command]/route";
 const mocks = vi.hoisted(() => ({
   getWallet: vi.fn(),
   query: vi.fn(),
   consumeRateLimit: vi.fn(),
+  prepareFinancialIdentity: vi.fn(),
 }));
 vi.mock("../../apps/web/src/lib/economy", () => ({
   getRuntime: async () => ({
-    finance: { getWallet: mocks.getWallet },
+    finance: {
+      getWallet: mocks.getWallet,
+      prepareFinancialIdentity: mocks.prepareFinancialIdentity,
+    },
     repository: { consumeRateLimit: mocks.consumeRateLimit },
     database: { query: mocks.query },
   }),
@@ -19,6 +24,7 @@ afterEach(() => {
 });
 describe("wallet owner REST authentication", () => {
   it("accepts standard verified Supabase owners and rejects unverified, expired and MCP-audience sessions", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
     const issuer = "https://auth.test.normic/auth/v1",
       subject = crypto.randomUUID(),
       email = "verified@example.test",
@@ -107,5 +113,73 @@ describe("wallet owner REST authentication", () => {
     expect((await request(valid)).status).toBe(401);
     expect((await request(valid, "https://evil.test")).status).toBe(401);
     expect(mocks.getWallet).not.toHaveBeenCalled();
+  });
+
+  it("identifies configuration and root persistence failures without leaking error payloads", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubEnv("NORMIC_OWNER_AUTH_ISSUER", "https://auth.test/auth/v1");
+    vi.stubEnv("NORMIC_OWNER_AUTH_AUDIENCE", "authenticated");
+    vi.stubEnv("NORMIC_OWNER_AUTH_JWKS_URL", "https://auth.test/jwks");
+    vi.stubEnv("NEXT_PUBLIC_APP_URL", "https://normic.tech");
+    vi.stubEnv("ROBINHOOD_RPC_URL", "https://rpc.test/secret-rpc-key");
+    vi.stubEnv("ALCHEMY_API_KEY", "");
+    vi.spyOn(OAuthTokenVerifier.prototype, "verifyOwner").mockResolvedValue({
+      issuer: "https://auth.test/auth/v1",
+      subject: crypto.randomUUID(),
+      email: "owner@example.test",
+    });
+    mocks.consumeRateLimit.mockResolvedValue({ allowed: true });
+    mocks.prepareFinancialIdentity.mockReset();
+    const request = () =>
+      POST(
+        new Request(
+          "https://normic.tech/api/finance/prepare_financial_identity",
+          {
+            method: "POST",
+            headers: {
+              authorization: "Bearer secret-owner-token",
+              "x-normic-auth-mode": "owner",
+              "idempotency-key": crypto.randomUUID(),
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({ companyId: crypto.randomUUID() }),
+          },
+        ),
+        { params: Promise.resolve({ command: "prepare_financial_identity" }) },
+      );
+    const missing = await request();
+    expect(missing.status).toBe(503);
+    expect((await missing.json()).error).toMatchObject({
+      stage: "CONFIGURATION",
+      code: "FINANCIAL_UNAVAILABLE",
+      message: expect.stringContaining("ALCHEMY_API_KEY"),
+    });
+    expect(mocks.prepareFinancialIdentity).not.toHaveBeenCalled();
+    vi.stubEnv("ALCHEMY_API_KEY", "secret-alchemy-key");
+    mocks.prepareFinancialIdentity.mockRejectedValue({
+      code: "P0001",
+      message: "secret-error-detail",
+      query: "secret-sql",
+      parameters: ["secret-owner-token"],
+    });
+    const failed = await request();
+    const payload = await failed.json();
+    expect(failed.status).toBe(500);
+    expect(payload.error).toMatchObject({
+      stage: "ROOT_BINDING",
+      code: "INTERNAL_ERROR",
+      requestId: expect.stringMatching(/^[a-f0-9-]{36}$/),
+    });
+    expect(log).toHaveBeenLastCalledWith("FINANCIAL_WALLET_SETUP_FAILED", {
+      stage: "ROOT_BINDING",
+      code: "INTERNAL_ERROR",
+      databaseCode: "P0001",
+      requestId: payload.error.requestId,
+    });
+    expect(JSON.stringify([log.mock.calls, payload])).not.toContain("secret-");
+    mocks.prepareFinancialIdentity.mockResolvedValue({
+      state: "pending_passkey",
+    });
+    expect((await request()).status).toBe(200);
   });
 });

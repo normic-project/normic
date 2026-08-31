@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   FinancialService,
@@ -5,7 +6,11 @@ import {
   type FinancialChainPort,
   type FinancialWalletPort,
 } from "@normic/core";
-import { PostgresFinancialRepository } from "@normic/db";
+import {
+  PostgresFinancialRepository,
+  type RuntimeDatabase,
+  type SqlExecutor,
+} from "@normic/db";
 import {
   createTestRuntime,
   createIdentity,
@@ -14,6 +19,33 @@ import {
   TEST_AUDIENCE,
 } from "../support/runtime.js";
 import { testPasskey } from "../support/webauthn.js";
+
+const requireDb = createRequire(
+  new URL("../../packages/db/package.json", import.meta.url),
+);
+// No connection is opened. Use the installed production driver's real codec:
+// PostgreSQL describes $n::jsonb as JSONB; PGlite alone skips this wire step.
+const serializeJsonb = requireDb("postgres")().options.serializers[3802] as (
+  value: unknown,
+) => string;
+function postgresJsonParameters(database: RuntimeDatabase): RuntimeDatabase {
+  const wrap = (db: SqlExecutor): SqlExecutor => ({
+    query: (sql, parameters = []) => {
+      const encoded = [...parameters];
+      for (const match of sql.matchAll(/\$(\d+)::jsonb/g)) {
+        const index = Number(match[1]) - 1;
+        if (encoded[index] !== null)
+          encoded[index] = serializeJsonb(encoded[index]);
+      }
+      return db.query(sql, encoded);
+    },
+  });
+  return {
+    ...database,
+    ...wrap(database),
+    transaction: (run) => database.transaction((tx) => run(wrap(tx))),
+  };
+}
 
 describe("financial WebAuthn enrollment and provisioning", () => {
   let rt: Awaited<ReturnType<typeof createTestRuntime>>,
@@ -26,7 +58,7 @@ describe("financial WebAuthn enrollment and provisioning", () => {
   const provision = vi.fn();
   beforeEach(async () => {
     rt = await createTestRuntime();
-    repo = new PostgresFinancialRepository(rt.database);
+    repo = new PostgresFinancialRepository(postgresJsonParameters(rt.database));
     agent = await createIdentity(rt.repository, "passkey-owner");
     companyId = agent.companyId;
     owner = {

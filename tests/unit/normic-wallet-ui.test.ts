@@ -151,6 +151,10 @@ describe("Create Normic Wallet", () => {
   it("sends owner bearer authentication through the passkey flow and displays only the resulting wallet", async () => {
     await render();
     expect(container.textContent).toContain("Create Normic Wallet");
+    expect(
+      container.querySelector(".normic-wallet-section > button.button")
+        ?.textContent,
+    ).toBe("Create Normic Wallet");
     await click();
     expect(mocks.startRegistration).toHaveBeenCalledWith({
       optionsJSON: expect.objectContaining({ rp: { id: "normic.tech" } }),

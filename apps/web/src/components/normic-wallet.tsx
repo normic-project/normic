@@ -313,7 +313,10 @@ export function NormicWallet() {
       connection.identity?.credentialId,
     );
   return (
-    <section className="owner-section" aria-busy={busy || !ready}>
+    <section
+      className="owner-section normic-wallet-section"
+      aria-busy={busy || !ready}
+    >
       <div className="owner-section-head">
         <span>YOUR NORMIC WALLET</span>
         <h2>{wallet ? "Your financial address." : "Create Normic Wallet"}</h2>

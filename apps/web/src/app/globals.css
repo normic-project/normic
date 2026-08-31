@@ -253,44 +253,7 @@ select {
 }
 .app-shell {
   min-height: 100vh;
-  display: grid;
-  grid-template-columns: 235px 1fr;
-}
-.app-nav {
-  position: sticky;
-  top: 0;
-  height: 100vh;
-  padding: 28px 20px;
-  display: flex;
-  flex-direction: column;
-  border-right: 1px solid #ced4cc;
-  background: #18251f;
-  color: #f7f8f3;
-}
-.app-nav .brand {
-  padding: 0 9px;
-}
-.app-nav .brand-mark {
-  border-radius: 0;
-}
-.app-nav nav {
-  display: grid;
-  gap: 4px;
-  margin-top: 58px;
-}
-.app-nav nav a {
-  min-height: 44px;
-  padding: 0 12px;
-  display: flex;
-  align-items: center;
-  gap: 11px;
-  border-radius: 4px;
-  color: #bac5be;
-  font-size: 12px;
-}
-.app-nav nav a:hover {
-  background: #26372f;
-  color: #fff;
+  display: block;
 }
 .app-stage {
   min-width: 0;
@@ -884,19 +847,6 @@ select {
   .search-field {
     grid-column: 1 / -1;
   }
-  .app-shell {
-    grid-template-columns: 136px 1fr;
-  }
-  .app-nav {
-    padding: 24px 11px;
-  }
-  .app-nav nav span {
-    display: none;
-  }
-  .app-nav .brand,
-  .app-nav nav a {
-    justify-content: center;
-  }
   .card-grid,
   .market-grid {
     grid-template-columns: repeat(2, 1fr);
@@ -930,26 +880,6 @@ select {
   }
   .hero h1 {
     font-size: 56px;
-  }
-  .app-shell {
-    display: block;
-  }
-  .app-nav {
-    position: static;
-    width: 100%;
-    height: auto;
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-  }
-  .app-nav nav {
-    margin: 0 0 0 auto;
-    display: flex;
-  }
-  .app-nav nav a {
-    display: flex;
-    min-width: 36px;
-    padding: 0 8px;
   }
   .app-topbar {
     padding: 0 16px;
@@ -1940,23 +1870,6 @@ select {
   background: #f2f3ee;
   color: #0a0d18;
 }
-.app-nav {
-  background: #0a0d18;
-  color: #f2f3ee;
-  border-color: #f2f3ee;
-}
-.app-nav .brand-mark {
-  border-radius: 0;
-}
-.app-nav nav a {
-  color: #f2f3ee;
-  opacity: 0.66;
-  border-radius: 999px;
-}
-.app-nav nav a:hover {
-  background: #002b00;
-  opacity: 1;
-}
 .app-topbar {
   background: #f2f3ee;
   border-color: #0a0d18;
@@ -1964,6 +1877,136 @@ select {
 .app-topbar b {
   background: #0a0d18;
   color: #f2f3ee;
+}
+.owner-topbar-navigation {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.owner-menu-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  flex: 0 0 auto;
+  border: 1px solid color-mix(in srgb, #0a0d18 18%, transparent);
+  border-radius: 50%;
+  background: #f2f3ee;
+  color: #0a0d18;
+  cursor: pointer;
+  transition:
+    background 180ms ease,
+    color 180ms ease;
+}
+.owner-menu-toggle:hover {
+  background: #0a0d18;
+  color: #f2f3ee;
+}
+.owner-menu-toggle:focus-visible,
+.owner-menu a:focus-visible,
+.normic-wallet-section > .button:focus-visible {
+  outline: 2px solid #002b00;
+  outline-offset: 4px;
+}
+.owner-menu {
+  width: min(360px, calc(100vw - 32px));
+  max-height: calc(100dvh - 96px);
+  margin: 76px auto auto 24px;
+  padding: 0;
+  overflow: auto;
+  border: 1px solid color-mix(in srgb, #0a0d18 15%, transparent);
+  border-radius: 24px;
+  background: #f2f3ee;
+  color: #0a0d18;
+  box-shadow: 0 24px 70px color-mix(in srgb, #0a0d18 20%, transparent);
+  font:
+    500 16px/1.4 Arial,
+    Helvetica,
+    sans-serif;
+  text-transform: none;
+  letter-spacing: normal;
+  opacity: 0;
+  transform: translateY(-8px);
+  transition:
+    opacity 220ms ease,
+    transform 220ms ease,
+    overlay 220ms allow-discrete,
+    display 220ms allow-discrete;
+}
+.owner-menu[open] {
+  opacity: 1;
+  transform: translateY(0);
+}
+.owner-menu::backdrop {
+  background: color-mix(in srgb, #0a0d18 30%, transparent);
+  opacity: 0;
+  transition:
+    opacity 220ms ease,
+    overlay 220ms allow-discrete,
+    display 220ms allow-discrete;
+}
+.owner-menu[open]::backdrop {
+  opacity: 1;
+}
+@starting-style {
+  .owner-menu[open] {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  .owner-menu[open]::backdrop {
+    opacity: 0;
+  }
+}
+.owner-menu-content {
+  padding: 22px;
+}
+.owner-menu-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding-bottom: 20px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid color-mix(in srgb, #0a0d18 15%, transparent);
+}
+.owner-menu nav {
+  display: grid;
+  gap: 5px;
+}
+.owner-menu nav a {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 48px;
+  padding: 10px 14px;
+  border-radius: 14px;
+  transition:
+    background 180ms ease,
+    color 180ms ease;
+}
+.owner-menu nav a:hover,
+.owner-menu nav a[aria-current="page"] {
+  background: #0a0d18;
+  color: #f2f3ee;
+}
+@media (max-width: 720px) {
+  .app-topbar > b {
+    display: none;
+  }
+  .owner-menu {
+    margin-left: 16px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .owner-menu,
+  .owner-menu::backdrop,
+  .owner-menu-toggle,
+  .owner-menu nav a {
+    transition: none;
+    transform: none;
+  }
 }
 .app-shell .panel,
 .app-shell .setup-card,
@@ -2193,6 +2236,50 @@ select {
 .owner-form button:disabled {
   cursor: not-allowed;
   opacity: 0.48;
+}
+.owner-section.normic-wallet-section {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 20px;
+  padding: 36px 0 48px;
+}
+.normic-wallet-section .owner-section-head h2 {
+  margin: 12px 0 16px;
+}
+.normic-wallet-section > .button {
+  width: fit-content;
+  max-width: 100%;
+  min-height: 48px;
+  padding: 12px 24px;
+  align-self: flex-start;
+  background: #0a0d18;
+  color: #f2f3ee;
+  border-radius: 999px;
+  font:
+    600 16px/1.4 Arial,
+    Helvetica,
+    sans-serif;
+  letter-spacing: 0.01em;
+  text-transform: none;
+}
+.normic-wallet-section > .button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+.normic-wallet-section > p {
+  margin: 0;
+  max-width: 65ch;
+  line-height: 1.6;
+}
+.normic-wallet-section .owner-primary-message:empty {
+  display: none;
+}
+.normic-wallet-section .owner-primary-message {
+  align-self: flex-start;
+}
+.normic-wallet-section .owner-data-grid {
+  width: min(100%, 760px);
 }
 .owner-verification-email {
   overflow-wrap: anywhere;

@@ -11,15 +11,24 @@ export type WalletIdentityState = {
   smartAccountAddress: string | null;
 };
 export class WalletRequestError extends Error {
-  constructor(readonly code: string) {
+  constructor(
+    readonly code: string,
+    stage?: string,
+    requestId?: string,
+  ) {
     super(
-      code === "UNAUTHENTICATED"
-        ? "Your session or passkey challenge has expired. Please try again."
-        : code === "FORBIDDEN" || code === "POLICY_DENIED"
-          ? "A verified owner and an active MCP-connected agent are required."
-          : code === "CONFLICT" || code.startsWith("IDEMPOTENCY_")
-            ? "Your wallet setup has changed. Refresh its status before retrying."
-            : "Wallet setup is temporarily unavailable. Your existing passkey and wallet will not be replaced. Please retry.",
+      (stage === "CONFIGURATION"
+        ? "Wallet setup is not configured yet. Please contact Normic support."
+        : code === "UNAUTHENTICATED"
+          ? "Your session or passkey challenge has expired. Please try again."
+          : code === "FORBIDDEN" || code === "POLICY_DENIED"
+            ? "A verified owner and an active MCP-connected agent are required."
+            : code === "CONFLICT" || code.startsWith("IDEMPOTENCY_")
+              ? "Your wallet setup has changed. Refresh its status before retrying."
+              : "Wallet setup is temporarily unavailable. Your existing passkey and wallet will not be replaced. Please retry.") +
+        (typeof requestId === "string" && /^[0-9a-f-]{36}$/i.test(requestId)
+          ? ` Support reference: ${requestId}.`
+          : ""),
     );
   }
 }
@@ -43,6 +52,8 @@ export async function walletRequest<T>(
   if (!response.ok)
     throw new WalletRequestError(
       typeof data.error?.code === "string" ? data.error.code : "UNAVAILABLE",
+      data.error?.stage,
+      data.error?.requestId,
     );
   return data as T;
 }

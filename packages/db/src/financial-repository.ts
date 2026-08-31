@@ -58,8 +58,10 @@ export class PostgresFinancialRepository implements FinancialRepository {
     );
   }
   async saveRootBinding(binding: FinancialRootBinding) {
+    // Serialized JSON must bind as text. Otherwise postgres-js JSONB-encodes
+    // the string again, unlike PGlite, and immutable snapshot checks reject it.
     await this.db.query(
-      "INSERT INTO financial_root_bindings(id,company_id,owner_user_id,chain_id,root_type,status,root_identity,smart_account_address,account_salt,data,created_at,updated_at) VALUES($1,$2,$3,4663,'webauthn-mav2',$4,$5,$6,0,$7::jsonb,$8,$9)",
+      "INSERT INTO financial_root_bindings(id,company_id,owner_user_id,chain_id,root_type,status,root_identity,smart_account_address,account_salt,data,created_at,updated_at) VALUES($1,$2,$3,4663,'webauthn-mav2',$4,$5,$6,0,$7::text::jsonb,$8,$9)",
       [
         binding.id,
         binding.companyId,
@@ -75,7 +77,7 @@ export class PostgresFinancialRepository implements FinancialRepository {
   }
   async updateRootBinding(binding: FinancialRootBinding) {
     await this.db.query(
-      "UPDATE financial_root_bindings SET status=$2,root_identity=$3,smart_account_address=$4,data=$5::jsonb WHERE id=$1",
+      "UPDATE financial_root_bindings SET status=$2,root_identity=$3,smart_account_address=$4,data=$5::text::jsonb WHERE id=$1",
       [
         binding.id,
         binding.status,
@@ -113,7 +115,7 @@ export class PostgresFinancialRepository implements FinancialRepository {
       `INSERT INTO financial_webauthn_credentials(
        id,root_binding_id,credential_id,public_key_x,public_key_y,
        algorithm,rp_id,transports,validation_entity_id,purpose,sign_count,created_at,revoked_at
-       ) VALUES($1,$2,$3,$4,$5,-7,$6,$7::jsonb,$8,$9,$10,$11,$12)`,
+       ) VALUES($1,$2,$3,$4,$5,-7,$6,$7::text::jsonb,$8,$9,$10,$11,$12)`,
       [
         credential.id,
         credential.rootBindingId,
@@ -242,7 +244,7 @@ export class PostgresFinancialRepository implements FinancialRepository {
     response: unknown,
   ) {
     await this.db.query(
-      "UPDATE financial_idempotency SET response=$4::jsonb WHERE actor=$1 AND operation=$2 AND key=$3",
+      "UPDATE financial_idempotency SET response=$4::text::jsonb WHERE actor=$1 AND operation=$2 AND key=$3",
       [actor, operation, key, JSON.stringify(response)],
     );
   }
@@ -260,7 +262,7 @@ export class PostgresFinancialRepository implements FinancialRepository {
   }
   async saveWallet(w: FinancialWallet) {
     await this.db.query(
-      "INSERT INTO financial_wallets(company_id,agent_id,address,owner_address,root_binding_id,chain_id,provider,wallet_type,data) VALUES($1,$2,$3,$4,$5,4663,'alchemy-wallet-api',$6,$7::jsonb)",
+      "INSERT INTO financial_wallets(company_id,agent_id,address,owner_address,root_binding_id,chain_id,provider,wallet_type,data) VALUES($1,$2,$3,$4,$5,4663,'alchemy-wallet-api',$6,$7::text::jsonb)",
       [
         w.companyId,
         w.agentId,
@@ -497,7 +499,7 @@ export class PostgresFinancialRepository implements FinancialRepository {
     details: Record<string, string> = {},
   ) {
     await this.db.query(
-      "INSERT INTO audit_events(type,company_id,resource_type,resource_id,action,metadata) VALUES($1,$2,'finance',$3,$1,$4::jsonb)",
+      "INSERT INTO audit_events(type,company_id,resource_type,resource_id,action,metadata) VALUES($1,$2,'finance',$3,$1,$4::text::jsonb)",
       [type, companyId, resourceId, JSON.stringify({ actor, ...details })],
     );
   }
